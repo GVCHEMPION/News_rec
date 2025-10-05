@@ -36,7 +36,7 @@ services:
       --host 0.0.0.0
       --port 30000
       --tp 1
-      --max-total-tokens 8192
+      --max-total-tokens 4096
       --mem-fraction-static 0.85
     volumes:
       - sglang_cache:/root/.cache/huggingface
