@@ -1,0 +1,6 @@
+aiohttp
+beautifulsoup4
+fake-useragent
+schedule
+feedparser
+lxml

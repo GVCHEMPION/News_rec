@@ -1,0 +1,27 @@
+# FastAPI и веб-сервер
+fastapi
+uvicorn[standard]
+
+pyjwt
+
+sqlalchemy
+psycopg2-binary
+
+sentence-transformers
+scikit-learn
+numpy
+scipy
+
+natasha
+razdel
+navec
+
+networkx
+
+python-dotenv
+pydantic
+
+torch
+transformers
+tokenizers
+openai

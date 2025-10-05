@@ -1,0 +1,14 @@
+https://tass.ru/rss/v2.xml
+https://www.kommersant.ru/rss/news.xml
+#https://news.rambler.ru/rss/world/
+https://news.mail.ru/rss/
+#https://www.rg.ru/xml/index.xml
+https://www.ixbt.com/export/news.rss
+https://hi-news.ru/feed
+https://vz.ru/rss.xml
+https://www.vedomosti.ru/rss/news
+https://ria.ru/export/rss2/index.xml
+https://lenta.ru/rss
+https://www.kommersant.ru/rss/corp.xml
+https://www.goha.ru/rss/news
+#https://www.goha.ru/rss/articles
