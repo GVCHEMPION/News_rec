@@ -19,7 +19,6 @@ class LentaRuParser(AbstractNewsParser):
         
         text_div = soup.find('div', class_="topic-page__content _news")
         if not text_div:
-            print(1)
             return None
 
         texts = []

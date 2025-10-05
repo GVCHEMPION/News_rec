@@ -18,8 +18,7 @@ class GohaRuParser(AbstractNewsParser):
         soup = BeautifulSoup(html_content, 'lxml')
         
         text_div = soup.find('div', class_="editor-body entry-article__article-body")
-        if not text_div:
-            print(1)
+        if not text_div:            
             return None
 
         texts = []
