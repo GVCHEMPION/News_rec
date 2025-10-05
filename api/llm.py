@@ -10,21 +10,21 @@ class ClusterAnalysis(BaseModel):
         ..., 
         min_length=2, 
         max_length=3,
-        description="Рассуждения о выборе заголовка"
+        description="Рассуждения о выборе заголовка. Учитываем, что заголовок должен читаться"
     )
     title: str = Field(
         ...,
-        description="Заголовок кластера"
+        description="Красивый заголовок кластера, объединяющий все темы"
     )
     reasoning_about_summary: List[str] = Field(
         ...,
         min_length=3,
         max_length=5,
-        description="Рассуждения о создании саммари"
+        description="Рассуждения о создании саммари по всему класстеру"
     )
     summary: str = Field(
         ...,
-        description="Краткое содержание кластера"
+        description="Краткое содержание кластера, которое показывает читателю, о чём класстер"
     )
 
 
@@ -64,7 +64,7 @@ class TextClusterAnalyzer:
             response_format=ClusterAnalysis,
             temperature=0.7
         )
-        
+        print(type(completion.choices[0].message.parsed))
         return completion.choices[0].message.parsed
     
     async def analyze_multiple_clusters(self, clusters: List[List[str]]) -> List[ClusterAnalysis]:
