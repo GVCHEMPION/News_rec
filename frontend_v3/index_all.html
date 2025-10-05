@@ -20,6 +20,8 @@
             --accent-hover: #b91c1c;
             --border: #e5e5e5;
             --shadow: rgba(0, 0, 0, 0.1);
+            --success: #22c55e;
+            --success-hover: #16a34a;
         }
 
         [data-theme="dark"] {
@@ -31,6 +33,8 @@
             --accent-hover: #ef4444;
             --border: #2a2a2a;
             --shadow: rgba(255, 255, 255, 0.05);
+            --success: #4ade80;
+            --success-hover: #22c55e;
         }
 
         body {
@@ -97,7 +101,19 @@
         .btn-secondary:hover {
             border-color: var(--accent);
         }
-
+        
+        /* Стили для анимации кнопки "Прочитано" */
+        .btn-marked-read {
+            background: var(--success);
+            color: white;
+            border-color: var(--success-hover);
+            transform: scale(1.02);
+        }
+        .btn-marked-read:hover {
+             background: var(--success-hover);
+             border-color: var(--success-hover);
+        }
+        
         .theme-toggle {
             background: none;
             font-size: 20px;
@@ -200,12 +216,25 @@
             margin-bottom: 20px;
             border-left: 4px solid var(--accent);
             box-shadow: 0 2px 8px var(--shadow);
-            transition: all 0.3s;
+            transition: all 0.3s, transform 0.5s ease, max-height 0.5s ease-out, opacity 0.5s ease-out;
+            max-height: 500px; /* Изначальная высота для анимации схлопывания */
+            overflow: hidden;
         }
 
         .article-card:hover {
             transform: translateX(5px);
             box-shadow: 0 4px 16px var(--shadow);
+        }
+        
+        /* CSS класс для плавного скрытия карточки */
+        .article-card.fading-out {
+            opacity: 0;
+            transform: translateX(30px);
+            max-height: 0;
+            padding-top: 0;
+            padding-bottom: 0;
+            margin-bottom: 0;
+            border-width: 0;
         }
 
         .article-title {
@@ -382,7 +411,8 @@
             <div class="logo">📰 News Platform</div>
             <div class="header-actions">
                 <button class="theme-toggle" onclick="toggleTheme()">🌓</button>
-                <button class="btn-secondary" onclick="showProfile()">Профиль</button>
+                <!-- ИЗМЕНЕНИЕ: onclick теперь вызывает toggleProfileView() -->
+                <button id="profileBtn" class="btn-secondary" onclick="toggleProfileView()">Профиль</button>
                 <button class="btn-secondary" onclick="logout()">Выход</button>
             </div>
         </header>
@@ -450,6 +480,8 @@
         let selectedSources = new Set();
         let allSources = {};
         let currentTab = 'recommendations';
+        // ИЗМЕНЕНИЕ: Переменная для хранения последней активной вкладки
+        let lastActiveTab = 'recommendations';
 
         // Theme
         function toggleTheme() {
@@ -459,69 +491,37 @@
             localStorage.setItem('theme', current === 'dark' ? 'light' : 'dark');
         }
 
-        // Load saved theme
         const savedTheme = localStorage.getItem('theme') || 'light';
         document.documentElement.setAttribute('data-theme', savedTheme);
+        
+        function shuffleArray(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+        }
 
         // Auth
         async function register() {
             const login = document.getElementById('loginInput').value.trim();
             const password = document.getElementById('passwordInput').value.trim();
-
-            if (!login || !password) {
-                showError('authError', 'Заполните все поля');
-                return;
-            }
-
+            if (!login || !password) { showError('authError', 'Заполните все поля'); return; }
             try {
-                const response = await fetch(`${API_URL}/auth/register`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ login, password })
-                });
-
+                const response = await fetch(`${API_URL}/auth/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login, password }) });
                 const data = await response.json();
-
-                if (response.ok) {
-                    token = data.access_token;
-                    localStorage.setItem('token', token);
-                    await loadSources();
-                } else {
-                    showError('authError', data.detail || 'Ошибка регистрации');
-                }
-            } catch (error) {
-                showError('authError', 'Ошибка подключения к серверу');
-            }
+                if (response.ok) { token = data.access_token; localStorage.setItem('token', token); await loadSources(); } else { showError('authError', data.detail || 'Ошибка регистрации'); }
+            } catch (error) { showError('authError', 'Ошибка подключения к серверу'); }
         }
 
         async function login() {
             const login = document.getElementById('loginInput').value.trim();
             const password = document.getElementById('passwordInput').value.trim();
-
-            if (!login || !password) {
-                showError('authError', 'Заполните все поля');
-                return;
-            }
-
+            if (!login || !password) { showError('authError', 'Заполните все поля'); return; }
             try {
-                const response = await fetch(`${API_URL}/auth/login`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ login, password })
-                });
-
+                const response = await fetch(`${API_URL}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login, password }) });
                 const data = await response.json();
-
-                if (response.ok) {
-                    token = data.access_token;
-                    localStorage.setItem('token', token);
-                    showMainContent();
-                } else {
-                    showError('authError', data.detail || 'Неверный логин или пароль');
-                }
-            } catch (error) {
-                showError('authError', 'Ошибка подключения к серверу');
-            }
+                if (response.ok) { token = data.access_token; localStorage.setItem('token', token); showMainContent(); } else { showError('authError', data.detail || 'Неверный логин или пароль'); }
+            } catch (error) { showError('authError', 'Ошибка подключения к серверу'); }
         }
 
         function logout() {
@@ -536,49 +536,27 @@
         // Sources
         async function loadSources() {
             try {
-                const response = await fetch(`${API_URL}/rss/info`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-
+                const response = await fetch(`${API_URL}/rss/info`, { headers: { 'Authorization': `Bearer ${token}` } });
                 const data = await response.json();
-
-                if (response.ok) {
-                    allSources = data.sources || {};
-                    displaySources();
-                    document.getElementById('authForm').classList.add('hidden');
-                    document.getElementById('sourcesSelection').style.display = 'block';
-                }
-            } catch (error) {
-                console.error('Error loading sources:', error);
-                showMainContent();
-            }
+                if (response.ok) { allSources = data.sources || {}; displaySources(); document.getElementById('authForm').classList.add('hidden'); document.getElementById('sourcesSelection').style.display = 'block'; }
+            } catch (error) { console.error('Error loading sources:', error); showMainContent(); }
         }
 
         function displaySources() {
             const grid = document.getElementById('sourcesGrid');
             grid.innerHTML = '';
-
             Object.entries(allSources).forEach(([source, count]) => {
                 selectedSources.add(source);
                 const card = document.createElement('div');
                 card.className = 'source-card selected';
-                card.innerHTML = `
-                    <div><strong>${source}</strong></div>
-                    <div class="source-count">${count} статей</div>
-                `;
+                card.innerHTML = `<div><strong>${source}</strong></div><div class="source-count">${count} статей</div>`;
                 card.onclick = () => toggleSource(source, card);
                 grid.appendChild(card);
             });
         }
 
         function toggleSource(source, element) {
-            if (selectedSources.has(source)) {
-                selectedSources.delete(source);
-                element.classList.remove('selected');
-            } else {
-                selectedSources.add(source);
-                element.classList.add('selected');
-            }
+            if (selectedSources.has(source)) { selectedSources.delete(source); element.classList.remove('selected'); } else { selectedSources.add(source); element.classList.add('selected'); }
         }
 
         async function confirmSources() {
@@ -588,236 +566,160 @@
 
         // Main content
         function showMainContent() {
+            document.getElementById('authForm').classList.add('hidden');
             document.getElementById('header').classList.remove('hidden');
             document.getElementById('mainContent').classList.remove('hidden');
             loadRecommendations();
         }
 
-        function showTab(tab) {
-            currentTab = tab;
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            event.target.classList.add('active');
-
-            document.getElementById('recommendationsTab').classList.add('hidden');
-            document.getElementById('allTab').classList.add('hidden');
-            document.getElementById('clustersTab').classList.add('hidden');
-            document.getElementById('profileTab').classList.add('hidden');
-
-            if (tab === 'recommendations') {
-                document.getElementById('recommendationsTab').classList.remove('hidden');
-                loadRecommendations();
-            } else if (tab === 'all') {
-                document.getElementById('allTab').classList.remove('hidden');
-                loadAllArticles();
-            } else if (tab === 'clusters') {
-                document.getElementById('clustersTab').classList.remove('hidden');
-                loadClusters();
+        // ИЗМЕНЕНИЕ: Функция принимает второй аргумент - элемент, чтобы подсветить нужный таб
+        function showTab(tab, element = null) {
+            // Если мы переключаемся с профиля на обычную вкладку, меняем текст кнопки
+            if (currentTab === 'profile') {
+                document.getElementById('profileBtn').innerText = 'Профиль';
             }
+            currentTab = tab;
+            
+            const tabElement = element || event.target;
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            if(tabElement) tabElement.classList.add('active');
+
+            ['recommendationsTab', 'allTab', 'clustersTab', 'profileTab'].forEach(id => document.getElementById(id).classList.add('hidden'));
+            
+            if (tab === 'recommendations') { document.getElementById('recommendationsTab').classList.remove('hidden'); loadRecommendations(); } 
+            else if (tab === 'all') { document.getElementById('allTab').classList.remove('hidden'); loadAllArticles(); } 
+            else if (tab === 'clusters') { document.getElementById('clustersTab').classList.remove('hidden'); loadClusters(); }
         }
 
         async function loadRecommendations() {
             const container = document.getElementById('recommendations');
             container.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка рекомендаций...</div>';
-
             try {
-                const response = await fetch(`${API_URL}/recommendations?top_n=20`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-
+                const response = await fetch(`${API_URL}/recommendations?top_n=10`, { headers: { 'Authorization': `Bearer ${token}` } });
                 const data = await response.json();
-
-                if (response.ok && data.recommendations) {
-                    displayArticles(data.recommendations, container, true);
-                } else {
-                    container.innerHTML = '<p style="text-align: center; color: var(--text-secondary);">Нет рекомендаций</p>';
-                }
-            } catch (error) {
-                container.innerHTML = '<p style="text-align: center; color: var(--accent);">Ошибка загрузки</p>';
-            }
+                if (response.ok && data.recommendations && data.recommendations.length > 0) { container.innerHTML = ''; displayArticles(data.recommendations, container, true); } 
+                else { container.innerHTML = '<p style="text-align: center; color: var(--text-secondary);">Для вас пока нет персональных рекомендаций. Прочитайте несколько статей из вкладки "Все статьи", чтобы мы могли узнать ваши интересы!</p>'; }
+            } catch (error) { container.innerHTML = '<p style="text-align: center; color: var(--accent);">Ошибка загрузки</p>'; }
         }
 
         async function loadAllArticles() {
             const container = document.getElementById('allArticles');
             container.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка статей...</div>';
-
             try {
-                const response = await fetch(`${API_URL}/articles?limit=50`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-
+                const response = await fetch(`${API_URL}/articles?limit=50`, { headers: { 'Authorization': `Bearer ${token}` } });
                 const articles = await response.json();
-
                 if (response.ok) {
-                    displayArticles(articles, container, false);
+                    container.innerHTML = '';
+                    shuffleArray(articles);
+                    const randomArticles = articles.slice(0, 10);
+                    displayArticles(randomArticles, container, false);
                 }
-            } catch (error) {
-                container.innerHTML = '<p style="text-align: center; color: var(--accent);">Ошибка загрузки</p>';
-            }
+            } catch (error) { container.innerHTML = '<p style="text-align: center; color: var(--accent);">Ошибка загрузки</p>'; }
         }
 
         async function loadClusters() {
             const container = document.getElementById('clustersList');
             container.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка кластеров...</div>';
-
             try {
-                const response = await fetch(`${API_URL}/clusters?limit=30`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-
+                const response = await fetch(`${API_URL}/clusters?limit=30`, { headers: { 'Authorization': `Bearer ${token}` } });
                 const clusters = await response.json();
-
                 if (response.ok) {
                     container.innerHTML = '';
                     clusters.forEach(cluster => {
                         const card = document.createElement('div');
                         card.className = 'article-card';
                         card.style.cursor = 'pointer';
-                        card.innerHTML = `
-                            <div class="article-title">${cluster.name}</div>
-                            <div class="article-summary">${cluster.summary}</div>
-                            <div style="color: var(--text-secondary); font-size: 13px;">
-                                📊 ${cluster.articles_count} статей
-                            </div>
-                        `;
+                        card.innerHTML = `<div class="article-title">${cluster.name}</div><div class="article-summary">${cluster.summary}</div><div style="color: var(--text-secondary); font-size: 13px;">📊 ${cluster.articles_count} статей</div>`;
                         card.onclick = () => loadClusterArticles(cluster.id);
                         container.appendChild(card);
                     });
                 }
-            } catch (error) {
-                container.innerHTML = '<p style="text-align: center; color: var(--accent);">Ошибка загрузки</p>';
-            }
+            } catch (error) { container.innerHTML = '<p style="text-align: center; color: var(--accent);">Ошибка загрузки</p>'; }
         }
 
         async function loadClusterArticles(clusterId) {
             const container = document.getElementById('clustersList');
             container.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка статей кластера...</div>';
-
             try {
-                const response = await fetch(`${API_URL}/clusters/${clusterId}`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-
+                const response = await fetch(`${API_URL}/clusters/${clusterId}`, { headers: { 'Authorization': `Bearer ${token}` } });
                 const data = await response.json();
-
                 if (response.ok) {
-                    container.innerHTML = `
-                        <button class="btn-secondary" onclick="loadClusters()" style="margin-bottom: 20px;">← Назад к кластерам</button>
-                        <h3 style="color: var(--accent); margin-bottom: 20px;">${data.name}</h3>
-                        <p style="color: var(--text-secondary); margin-bottom: 30px;">${data.summary}</p>
-                    `;
+                    container.innerHTML = `<button class="btn-secondary" onclick="loadClusters()" style="margin-bottom: 20px;">← Назад к кластерам</button><h3 style="color: var(--accent); margin-bottom: 20px;">${data.name}</h3><p style="color: var(--text-secondary); margin-bottom: 30px;">${data.summary}</p>`;
                     displayArticles(data.articles, container, false);
                 }
-            } catch (error) {
-                container.innerHTML = '<p style="text-align: center; color: var(--accent);">Ошибка загрузки</p>';
-            }
+            } catch (error) { container.innerHTML = '<p style="text-align: center; color: var(--accent);">Ошибка загрузки</p>'; }
         }
 
         function displayArticles(articles, container, isRecommendation) {
-            if (!articles || articles.length === 0) {
-                container.innerHTML += '<p style="text-align: center; color: var(--text-secondary);">Статей не найдено</p>';
-                return;
-            }
-
+            if (!articles || articles.length === 0) { container.innerHTML += '<p style="text-align: center; color: var(--text-secondary);">Статей не найдено</p>'; return; }
             articles.forEach(item => {
                 const article = isRecommendation ? item.article : item;
-                
-                if (selectedSources.size > 0 && article.source && !selectedSources.has(article.source)) {
-                    return;
-                }
-
+                if (selectedSources.size > 0 && article.source && !selectedSources.has(article.source)) return;
                 const card = document.createElement('div');
                 card.className = 'article-card';
-                
-                const hashtags = (article.hashtags || []).map(tag => 
-                    `<span class="hashtag">#${tag}</span>`
-                ).join('');
-
-                card.innerHTML = `
-                    ${isRecommendation ? `<div class="recommendation-badge">⭐ ${item.reason} (${item.score})</div>` : ''}
-                    <div class="article-title">${article.title}</div>
-                    <div class="article-meta">
-                        <span>📰 ${article.source || 'Unknown'}</span>
-                        ${article.author ? `<span>✍️ ${article.author}</span>` : ''}
-                        ${article.published ? `<span>📅 ${article.published}</span>` : ''}
-                    </div>
-                    ${article.short_summary ? `<div class="article-summary">${article.short_summary}</div>` : ''}
-                    ${hashtags ? `<div class="hashtags">${hashtags}</div>` : ''}
-                    <div class="article-actions">
-                        <button class="btn-primary btn-small" onclick="window.open('${article.link}', '_blank')">Читать</button>
-                        <button class="btn-secondary btn-small" onclick="markAsRead('${article.id}')">✓ Прочитано</button>
-                    </div>
-                `;
-                
+                card.id = `article-card-${article.id}`;
+                const hashtags = (article.hashtags || []).map(tag => `<span class="hashtag">#${tag}</span>`).join('');
+                card.innerHTML = `${isRecommendation ? `<div class="recommendation-badge">⭐ ${item.reason} (${item.score})</div>` : ''}<div class="article-title">${article.title}</div><div class="article-meta"><span>📰 ${article.source || 'Unknown'}</span>${article.author ? `<span>✍️ ${article.author}</span>` : ''}${article.published ? `<span>📅 ${new Date(article.published).toLocaleDateString('ru-RU')}</span>` : ''}</div>${article.short_summary ? `<div class="article-summary">${article.short_summary}</div>` : ''}${hashtags ? `<div class="hashtags">${hashtags}</div>` : ''}<div class="article-actions"><button class="btn-primary btn-small" onclick="handleReadClick('${article.link}', '${article.id}')">Читать</button><button class="btn-secondary btn-small" onclick="markAsRead('${article.id}', this)">✓ Прочитано</button></div>`;
                 container.appendChild(card);
             });
         }
+        
+        function handleReadClick(link, articleId) {
+            window.open(link, '_blank');
+            markAsRead(articleId); 
+        }
 
-        async function markAsRead(articleId) {
+        async function markAsRead(articleId, buttonElement = null) {
             try {
-                await fetch(`${API_URL}/articles/${articleId}/read`, {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-
-                if (currentTab === 'recommendations') {
-                    loadRecommendations();
+                const response = await fetch(`${API_URL}/articles/${articleId}/read`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } });
+                if (response.ok) {
+                    const cardElement = document.getElementById(`article-card-${articleId}`);
+                    if (!buttonElement && cardElement) { buttonElement = cardElement.querySelector('.btn-secondary'); }
+                    if (buttonElement) { buttonElement.innerText = 'Прочитано!'; buttonElement.classList.add('btn-marked-read'); buttonElement.disabled = true; }
+                    if (cardElement) { cardElement.classList.add('fading-out'); setTimeout(() => cardElement.remove(), 500); }
                 }
-            } catch (error) {
-                console.error('Error marking as read:', error);
+            } catch (error) { console.error('Error marking as read:', error); }
+        }
+        
+        // ИЗМЕНЕНИЕ: Новая функция-переключатель для профиля
+        function toggleProfileView() {
+            const profileBtn = document.getElementById('profileBtn');
+
+            // Если профиль уже открыт, закрываем его и возвращаемся
+            if (currentTab === 'profile') {
+                profileBtn.innerText = 'Профиль';
+                // Находим DOM-элемент последней активной вкладки
+                const lastTabElement = document.querySelector(`.tab[onclick*="'${lastActiveTab}'"]`);
+                // Переключаемся на нее
+                showTab(lastActiveTab, lastTabElement);
+            } 
+            // Иначе, открываем профиль
+            else {
+                lastActiveTab = currentTab; // Запоминаем, где мы были
+                currentTab = 'profile';
+                profileBtn.innerText = 'К новостям';
+
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                ['recommendationsTab', 'allTab', 'clustersTab'].forEach(id => document.getElementById(id).classList.add('hidden'));
+                
+                const profileTab = document.getElementById('profileTab');
+                profileTab.classList.remove('hidden');
+                loadProfileData(); // Загружаем данные для профиля
             }
         }
 
-        async function showProfile() {
-            currentTab = 'profile';
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.getElementById('recommendationsTab').classList.add('hidden');
-            document.getElementById('allTab').classList.add('hidden');
-            document.getElementById('clustersTab').classList.add('hidden');
-            document.getElementById('profileTab').classList.remove('hidden');
-
+        // ИЗМЕНЕНИЕ: Логика загрузки данных вынесена в отдельную функцию
+        async function loadProfileData() {
             const container = document.getElementById('profileContent');
             container.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка профиля...</div>';
-
             try {
-                const response = await fetch(`${API_URL}/profile`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-
+                const response = await fetch(`${API_URL}/profile`, { headers: { 'Authorization': `Bearer ${token}` } });
                 const data = await response.json();
-
                 if (response.ok) {
-                    const topTopics = Object.entries(data.interests.top_topics || {})
-                        .map(([topic, count]) => `<span class="hashtag">${topic} (${count})</span>`)
-                        .join('');
-
-                    container.innerHTML = `
-                        <div class="profile-stats">
-                            <div class="stat-card">
-                                <div class="stat-value">${data.statistics.read_articles_count}</div>
-                                <div class="stat-label">Прочитано статей</div>
-                            </div>
-                            <div class="stat-card">
-                                <div class="stat-value">${data.statistics.unique_topics_count}</div>
-                                <div class="stat-label">Интересов</div>
-                            </div>
-                            <div class="stat-card">
-                                <div class="stat-value">${data.statistics.unique_authors}</div>
-                                <div class="stat-label">Авторов</div>
-                            </div>
-                            <div class="stat-card">
-                                <div class="stat-value">${data.statistics.preferred_clusters}</div>
-                                <div class="stat-label">Кластеров</div>
-                            </div>
-                        </div>
-                        <div style="margin-top: 30px;">
-                            <h3 style="color: var(--accent); margin-bottom: 15px;">Ваши интересы</h3>
-                            <div class="hashtags">${topTopics || 'Пока нет данных'}</div>
-                        </div>
-                    `;
+                    const topTopics = Object.entries(data.interests.top_topics || {}).map(([topic, count]) => `<span class="hashtag">${topic} (${count})</span>`).join('');
+                    container.innerHTML = `<div class="profile-stats"><div class="stat-card"><div class="stat-value">${data.statistics.read_articles_count}</div><div class="stat-label">Прочитано статей</div></div><div class="stat-card"><div class="stat-value">${data.statistics.unique_topics_count}</div><div class="stat-label">Интересов</div></div><div class="stat-card"><div class="stat-value">${data.statistics.unique_authors}</div><div class="stat-label">Авторов</div></div><div class="stat-card"><div class="stat-value">${data.statistics.preferred_clusters}</div><div class="stat-label">Кластеров</div></div></div><div style="margin-top: 30px;"><h3 style="color: var(--accent); margin-bottom: 15px;">Ваши интересы</h3><div class="hashtags">${topTopics || 'Пока нет данных'}</div></div>`;
                 }
-            } catch (error) {
-                container.innerHTML = '<p style="text-align: center; color: var(--accent);">Ошибка загрузки профиля</p>';
-            }
+            } catch (error) { container.innerHTML = '<p style="text-align: center; color: var(--accent);">Ошибка загрузки профиля</p>'; }
         }
 
         function showError(elementId, message) {
@@ -826,7 +728,6 @@
             setTimeout(() => el.innerHTML = '', 5000);
         }
 
-        // Check for saved token
         const savedToken = localStorage.getItem('token');
         if (savedToken) {
             token = savedToken;
