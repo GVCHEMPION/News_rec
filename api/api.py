@@ -296,13 +296,13 @@ security = HTTPBearer()
 
 cluster_analyzer = None 
 
-async def generate_cluster_summary(articles_texts: List[str]) -> Dict[str, Any]:
+async def generate_cluster_summary(articles_summaries: List[str]) -> Dict[str, Any]:
     if not cluster_analyzer:
         logger.error("Cluster analyzer не был инициализирован.")
         raise HTTPException(status_code=503, detail="Сервис анализа кластеров недоступен.")
     
     try:
-        analysis = await cluster_analyzer.analyze_cluster(articles_texts)
+        analysis = await cluster_analyzer.analyze_cluster(articles_summaries)
         logger.info(f"LLM сгенерировал заголовок: '{analysis.title}'")
         return {
             "title": analysis.title,
@@ -311,7 +311,7 @@ async def generate_cluster_summary(articles_texts: List[str]) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Ошибка при генерации саммари кластера через LLM: {e}")
         return {
-            "title": f"Кластер из {len(articles_texts)} новостей",
+            "title": f"Кластер из {len(articles_summaries)} новостей",
             "summary": "Автоматическое резюме временно недоступно. Основные темы можно понять по заголовкам статей."
         }
 
@@ -340,9 +340,9 @@ async def process_rss_on_startup():
         cluster_summaries_tasks = []
         cluster_data_list = []
         for cluster_data in result['clusters']:
-            articles_texts = [f"{a['title']}\n{a.get('summary', '')}" for a in cluster_data['articles']]
+            articles_summaries = [a.get('summary', a['title']) for a in cluster_data['articles']]
             cluster_data_list.append(cluster_data)
-            cluster_summaries_tasks.append(generate_cluster_summary(articles_texts))
+            cluster_summaries_tasks.append(generate_cluster_summary(articles_summaries))
         
         cluster_summaries = await asyncio.gather(*cluster_summaries_tasks)
 
@@ -516,9 +516,9 @@ async def _process_and_save_articles(articles_dict: List[Dict], eps: float, min_
     cluster_summaries_tasks = []
     cluster_data_list = []
     for cluster_data in result['clusters']:
-        articles_texts = [f"{a['title']}\n{a.get('summary', '')}" for a in cluster_data['articles']]
+        articles_summaries = [a.get('summary', a['title']) for a in cluster_data['articles']]
         cluster_data_list.append(cluster_data)
-        cluster_summaries_tasks.append(generate_cluster_summary(articles_texts))
+        cluster_summaries_tasks.append(generate_cluster_summary(articles_summaries))
 
     cluster_summaries = await asyncio.gather(*cluster_summaries_tasks, return_exceptions=True)
 
