@@ -13,6 +13,7 @@ import secrets
 import jwt
 import os
 import asyncio
+import re
 from pathlib import Path
 
 from sqlalchemy import create_engine, Column, String, Integer, Text, DateTime, ForeignKey, Table, ARRAY, func
@@ -179,147 +180,36 @@ class RecommendationResponse(BaseModel):
     score: float
     reason: str
 
-# ==================== FASTAPI APP ====================
-
-app = FastAPI(
-    title="News Processing & Recommendation API",
-    description="API для кластеризации новостей с PostgreSQL и автоматической обработкой RSS",
-    version="2.0.0" 
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-security = HTTPBearer()
-
-# ==================== FASTAPI APP ====================
-
-cluster_analyzer = None 
-
-
-async def process_rss_on_startup():
-    logger.info("Проверка необходимости обработки RSS при старте...")
-    db = SessionLocal()
-    try:
-        article_count = db.query(Article).count()
-        if article_count > 0:
-            logger.info(f"В базе уже есть {article_count} статей. Пропуск обработки.")
-            return
-
-        logger.info("База данных пуста. Запускаем первоначальную обработку RSS...")
-        
-        rss_data = load_rss_json(RSS_JSON_PATH)
-        entries = rss_data.get("entries", [])
-        if not entries:
-            logger.info("В RSS JSON файле нет статей для обработки.")
-            return
-        
-        articles_dict = convert_rss_entries_to_articles(entries)
-        
-        try:
-            from service_code import UnifiedNewsService
-        except ImportError:
-            logger.info("Ошибка: Модуль 'service_code' не найден. Невозможно обработать статьи.")
-            return
-
-        service = UnifiedNewsService()
-        result = service.process_articles(articles_dict, eps=0.4, min_samples=1)
-        
-        created_clusters = {}
-        created_articles = {}
-
-        for cluster_data in result['clusters']:
-            cluster = Cluster(
-                cluster_number=int(cluster_data['cluster_id']),
-                name=cluster_data.get('cluster_name', f"Кластер #{cluster_data['cluster_id']}"),
-                summary=cluster_data.get('cluster_summary', "Сводка новостей по этой теме.")
-            )
-            db.add(cluster)
-            db.flush()
-            created_clusters[cluster_data['cluster_id']] = cluster
-
-        for cluster_data in result['clusters']:
-            cluster = created_clusters[cluster_data['cluster_id']]
-            for article_data in cluster_data['articles']:
-                article = Article(
-                    link=article_data['link'],
-                    title=article_data['title'],
-                    summary=article_data.get('summary'),
-                    short_summary=article_data.get('short_summary'),
-                    source=article_data.get('source'),
-                    published=article_data.get('published'),
-                    author=article_data.get('author'),
-                    hashtags=[tag.lower() for tag in article_data.get('hashtags', [])],
-                    entities=article_data.get('entities', {}),
-                    cluster_id=cluster.id
-                )
-                db.add(article)
-                db.flush()
-                created_articles[article_data['link']] = article
-
-        for cluster_data in result['clusters']:
-             for article_data in cluster_data['articles']:
-                article = created_articles[article_data['link']]
-                related = article_data.get('related_articles_in_cluster', [])
-                if related:
-                    for rel_data in related:
-                        related_article = created_articles.get(rel_data['link'])
-                        if related_article:
-                            article.related_articles.append(related_article)
-        
-        db.commit()
-        logger.info("Первоначальная обработка RSS успешно завершена.")
-
-    except HTTPException as e:
-        logger.info(f"Ошибка при обработке RSS на старте: {e.detail}")
-        db.rollback()
-    except Exception as e:
-        logger.info(f"Критическая ошибка при обработке RSS на старте: {e}")
-        db.rollback()
-    finally:
-        db.close()
-
-
-@app.on_event("startup")
-async def startup_event():
-    global cluster_analyzer
-    logger.info("Запуск приложения...")
-    cluster_analyzer = TextClusterAnalyzer(
-        api_key=os.getenv("OPENAI_API_KEY", "not-needed"),
-        base_url=os.getenv("OPENAI_BASE_URL", "http://localhost:30000/v1"),
-        model=os.getenv("OPENAI_MODEL", "Qwen/Qwen3-14B-AWQ")
-    )
-    asyncio.create_task(process_rss_on_startup())
-    logger.info("Приложение запущено. Обработка RSS выполняется в фоновом режиме.")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    global cluster_analyzer
-    if cluster_analyzer:
-        await cluster_analyzer.close()
-
-# ==================== DEPENDENCY ====================
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
 # ==================== UTILITY FUNCTIONS ====================
+
+def normalize_hashtag(tag: str) -> Optional[str]:
+    tag = tag.lstrip('#')
+    
+    # Оставляем только буквы, цифры и _
+    clean_tag = re.sub(r'[^\w]', '', tag, flags=re.UNICODE)
+    
+    if not clean_tag:
+        return None
+    
+    return f"#{clean_tag.lower()}"
+
+
+def normalize_hashtags(hashtags: List[str]) -> List[str]:
+    normalized = []
+    for tag in hashtags:
+        normalized_tag = normalize_hashtag(tag)
+        if normalized_tag and normalized_tag not in normalized:
+            normalized.append(normalized_tag)
+    return normalized
+
 
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
+
 def verify_password(password: str, hashed: str) -> bool:
     return hash_password(password) == hashed
+
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
@@ -331,6 +221,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
+
 def decode_token(token: str) -> dict:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -338,34 +229,6 @@ def decode_token(token: str) -> dict:
     except jwt.PyJWTError:
         return None
 
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(get_db)
-) -> User:
-    token = credentials.credentials
-    payload = decode_token(token)
-    
-    if payload is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-        )
-    
-    user_id = payload.get("sub")
-    if user_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-        )
-    
-    user = db.query(User).filter(User.id == uuid.UUID(user_id)).first()
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found",
-        )
-    
-    return user
 
 def load_rss_json(file_path: str = None) -> Dict[str, Any]:
     if file_path is None:
@@ -394,6 +257,7 @@ def load_rss_json(file_path: str = None) -> Dict[str, Any]:
             detail=f"Ошибка чтения файла: {str(e)}"
         )
 
+
 def convert_rss_entries_to_articles(entries: List[Dict]) -> List[Dict]:
     articles = []
     
@@ -411,6 +275,188 @@ def convert_rss_entries_to_articles(entries: List[Dict]) -> List[Dict]:
             articles.append(article)
     
     return articles
+
+# ==================== FASTAPI APP ====================
+
+app = FastAPI(
+    title="News Processing & Recommendation API",
+    description="API для кластеризации новостей с PostgreSQL и автоматической обработкой RSS",
+    version="2.0.0" 
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+security = HTTPBearer()
+
+cluster_analyzer = None 
+
+async def generate_cluster_summary(articles_texts: List[str]) -> Dict[str, Any]:
+    if not cluster_analyzer:
+        logger.error("Cluster analyzer не был инициализирован.")
+        raise HTTPException(status_code=503, detail="Сервис анализа кластеров недоступен.")
+    
+    try:
+        analysis = await cluster_analyzer.analyze_cluster(articles_texts)
+        logger.info(f"LLM сгенерировал заголовок: '{analysis.title}'")
+        return {
+            "title": analysis.title,
+            "summary": analysis.summary
+        }
+    except Exception as e:
+        logger.error(f"Ошибка при генерации саммари кластера через LLM: {e}")
+        return {
+            "title": f"Кластер из {len(articles_texts)} новостей",
+            "summary": "Автоматическое резюме временно недоступно. Основные темы можно понять по заголовкам статей."
+        }
+
+async def process_rss_on_startup():
+    logger.info("Запуск фоновой обработки RSS при старте...")
+    db = SessionLocal()
+    try:
+        # return #Выключение загрузки
+        rss_data = load_rss_json()
+        entries = rss_data.get("entries", [])
+        if not entries:
+            logger.info("В RSS файле нет статей для обработки.")
+            return
+
+        articles_dict = convert_rss_entries_to_articles(entries)
+        
+        try:
+            from service_code import UnifiedNewsService
+        except ImportError:
+            logger.error("Модуль 'service_code' не найден. Обработка на старте отменена.")
+            return
+
+        service = UnifiedNewsService()
+        result = service.process_articles(articles_dict, eps=0.4, min_samples=1)
+        
+        cluster_summaries_tasks = []
+        cluster_data_list = []
+        for cluster_data in result['clusters']:
+            articles_texts = [f"{a['title']}\n{a.get('summary', '')}" for a in cluster_data['articles']]
+            cluster_data_list.append(cluster_data)
+            cluster_summaries_tasks.append(generate_cluster_summary(articles_texts))
+        
+        cluster_summaries = await asyncio.gather(*cluster_summaries_tasks)
+
+        created_clusters = {}
+        created_articles = {}
+
+        for idx, cluster_data in enumerate(cluster_data_list):
+            llm_summary = cluster_summaries[idx]
+            
+            cluster = Cluster(
+                cluster_number=int(cluster_data['cluster_id']),
+                name=llm_summary['title'],
+                summary=llm_summary['summary']
+            )
+            db.add(cluster)
+            db.flush()
+            created_clusters[cluster_data['cluster_id']] = cluster
+
+        # Логика сохранения статей (остается прежней)
+        for cluster_data in result['clusters']:
+            cluster = created_clusters[cluster_data['cluster_id']]
+            for article_data in cluster_data['articles']:
+                normalized_tags = normalize_hashtags(article_data.get('hashtags', []))
+                existing_article = db.query(Article).filter(Article.link == article_data['link']).first()
+                if existing_article:
+                    article = existing_article
+                    # Обновляем поля, если статья уже есть
+                    article.title = article_data['title']
+                    article.summary = article_data.get('summary')
+                    article.short_summary = article_data.get('short_summary')
+                    article.hashtags = normalized_tags
+                    article.entities = article_data.get('entities', {})
+                    article.author = article_data.get('author')
+                    article.cluster_id = cluster.id
+                else:
+                    article = Article(
+                        link=article_data['link'],
+                        title=article_data['title'],
+                        summary=article_data.get('summary'),
+                        short_summary=article_data.get('short_summary'),
+                        source=article_data.get('source'),
+                        published=article_data.get('published'),
+                        author=article_data.get('author'),
+                        hashtags=normalized_tags,
+                        entities=article_data.get('entities', {}),
+                        cluster_id=cluster.id
+                    )
+                    db.add(article)
+                db.flush()
+                created_articles[article_data['link']] = article
+        
+        # Логика связывания статей (остается прежней)
+        for cluster_data in result['clusters']:
+            for article_data in cluster_data['articles']:
+                article = created_articles[article_data['link']]
+                related = article_data.get('related_articles_in_cluster', [])
+                if related:
+                    for rel_data in related:
+                        related_article = created_articles.get(rel_data['link'])
+                        if related_article and related_article not in article.related_articles:
+                            article.related_articles.append(related_article)
+        
+        db.commit()
+        logger.info(f"Обработка RSS на старте успешно завершена. Создано кластеров: {len(created_clusters)}, статей: {len(created_articles)}")
+
+    except HTTPException as e:
+        logger.warning(f"Ошибка при обработке RSS на старте: {e.detail}")
+        db.rollback()
+    except Exception as e:
+        logger.critical(f"Критическая ошибка при обработке RSS на старте: {e}", exc_info=True)
+        db.rollback()
+    finally:
+        db.close()
+
+@app.on_event("startup")
+async def startup_event():
+    global cluster_analyzer
+    logger.info("Запуск приложения...")
+    cluster_analyzer = TextClusterAnalyzer(
+        api_key=os.getenv("OPENAI_API_KEY", "not-needed"),
+        base_url=os.getenv("SGLANG_URL", "http://sglang:30000/v1"),
+        model=os.getenv("OPENAI_MODEL", "Qwen/Qwen3-14B-AWQ")
+    )
+    asyncio.create_task(process_rss_on_startup())
+    logger.info("Приложение запущено. Обработка RSS выполняется в фоновом режиме.")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    global cluster_analyzer
+    if cluster_analyzer:
+        await cluster_analyzer.close()
+    logger.info("Приложение остановлено.")
+
+# ==================== DEPENDENCY ====================
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)) -> User:
+    token = credentials.credentials
+    payload = decode_token(token)
+    if not payload or not (user_id := payload.get("sub")):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication credentials")
+    
+    user = db.query(User).filter(User.id == uuid.UUID(user_id)).first()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    
+    return user
 
 # ==================== AUTH ENDPOINTS ====================
 
@@ -439,6 +485,7 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
     
     return {"access_token": access_token, "token_type": "bearer"}
 
+
 @app.post("/api/v1/auth/login", response_model=Token, tags=["Authentication"])
 async def login(user_data: UserLogin, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.login == user_data.login).first()
@@ -457,294 +504,130 @@ async def login(user_data: UserLogin, db: Session = Depends(get_db)):
     return {"access_token": access_token, "token_type": "bearer"}
 
 # ==================== ARTICLES ENDPOINTS ====================
-
-async def generate_cluster_summary(articles_texts: List[str]) -> Dict[str, Any]:
-
-    if not cluster_analyzer:
-        raise HTTPException(
-            status_code=500,
-            detail="Cluster analyzer не инициализирован. Проверьте OPENAI_API_KEY"
-        )
-    
+async def _process_and_save_articles(articles_dict: List[Dict], eps: float, min_samples: int, db: Session):
     try:
-        analysis = await cluster_analyzer.analyze_cluster(articles_texts)
-        logger.info(analysis)
-        return {
-            "title": analysis.title,
-            "summary": analysis.summary,
-            "reasoning_about_title": analysis.reasoning_about_title,
-            "reasoning_about_summary": analysis.reasoning_about_summary
-        }
-    except Exception as e:
-        return {
-            "title": f"Кластер из {len(articles_texts)} статей",
-            "summary": "Автоматическое резюме недоступно",
-            "reasoning_about_title": ["Ошибка генерации"],
-            "reasoning_about_summary": [f"Ошибка: {str(e)}"]
-        }
+        from service_code import UnifiedNewsService
+    except ImportError:
+         raise HTTPException(status_code=500, detail="Модуль 'service_code' не найден.")
+
+    service = UnifiedNewsService()
+    result = service.process_articles(articles_dict, eps=eps, min_samples=min_samples)
+
+    cluster_summaries_tasks = []
+    cluster_data_list = []
+    for cluster_data in result['clusters']:
+        articles_texts = [f"{a['title']}\n{a.get('summary', '')}" for a in cluster_data['articles']]
+        cluster_data_list.append(cluster_data)
+        cluster_summaries_tasks.append(generate_cluster_summary(articles_texts))
+
+    cluster_summaries = await asyncio.gather(*cluster_summaries_tasks, return_exceptions=True)
+
+    created_clusters = {}
+    created_articles = {}
+    
+    for idx, cluster_data in enumerate(cluster_data_list):
+        llm_summary = cluster_summaries[idx]
+        
+        if isinstance(llm_summary, Exception):
+            logger.error(f"Задача LLM для кластера {cluster_data['cluster_id']} провалилась: {llm_summary}")
+            cluster_name = cluster_data.get('cluster_name', f"Кластер #{cluster_data['cluster_id']}")
+            cluster_summary_text = cluster_data.get('cluster_summary', 'Автоматическое резюме недоступно.')
+        else:
+            cluster_name = llm_summary['title']
+            cluster_summary_text = llm_summary['summary']
+        
+        cluster = Cluster(
+            cluster_number=int(cluster_data['cluster_id']),
+            name=cluster_name,
+            summary=cluster_summary_text
+        )
+        db.add(cluster)
+        db.flush()
+        created_clusters[cluster_data['cluster_id']] = cluster
+
+    for cluster_data in result['clusters']:
+        cluster = created_clusters[cluster_data['cluster_id']]
+        for article_data in cluster_data['articles']:
+            normalized_tags = normalize_hashtags(article_data.get('hashtags', []))
+            existing_article = db.query(Article).filter(Article.link == article_data['link']).first()
+            if existing_article:
+                article = existing_article
+                article.title, article.summary, article.short_summary, article.hashtags, article.entities, article.author, article.cluster_id = \
+                    article_data['title'], article_data.get('summary'), article_data.get('short_summary'), normalized_tags, article_data.get('entities', {}), article_data.get('author'), cluster.id
+            else:
+                article = Article(
+                    link=article_data['link'], title=article_data['title'], summary=article_data.get('summary'),
+                    short_summary=article_data.get('short_summary'), source=article_data.get('source'),
+                    published=article_data.get('published'), author=article_data.get('author'),
+                    hashtags=normalized_tags, entities=article_data.get('entities', {}), cluster_id=cluster.id
+                )
+                db.add(article)
+            db.flush()
+            created_articles[article_data['link']] = article
+
+    for cluster_data in result['clusters']:
+        for article_data in cluster_data['articles']:
+            article = created_articles[article_data['link']]
+            related = article_data.get('related_articles_in_cluster', [])
+            if related:
+                for rel_data in related:
+                    related_article = created_articles.get(rel_data['link'])
+                    if related_article and related_article not in article.related_articles:
+                        article.related_articles.append(related_article)
+    
+    db.commit()
+    
+    return {
+        "processed_articles": result['total_articles'],
+        "total_clusters": result['total_clusters'],
+        "clusters_created": len(created_clusters),
+        "articles_created_or_updated": len(created_articles),
+        "llm_summaries_generated": sum(1 for s in cluster_summaries if not isinstance(s, Exception))
+    }
 
 @app.post("/api/v1/articles/process-rss", tags=["Articles"])
-async def process_rss_articles(
-    request: RSSProcessRequest = Body(...),
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+async def process_rss_articles(request: RSSProcessRequest = Body(...), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
         rss_data = load_rss_json(request.json_path)
-        
         entries = rss_data.get("entries", [])
         if not entries:
-            raise HTTPException(
-                status_code=400,
-                detail="В RSS JSON файле нет статей"
-            )
+            raise HTTPException(status_code=400, detail="В RSS JSON файле нет статей")
         
         articles_dict = convert_rss_entries_to_articles(entries)
-        
         if not articles_dict:
-            raise HTTPException(
-                status_code=400,
-                detail="Не удалось извлечь статьи из JSON"
-            )
-        
-        try:
-            from service_code import UnifiedNewsService
-        except ImportError:
-             raise HTTPException(status_code=500, detail="Service module 'service_code' not found.")
+            raise HTTPException(status_code=400, detail="Не удалось извлечь статьи из JSON")
 
-        service = UnifiedNewsService()
-        
-        result = service.process_articles(
-            articles_dict,
-            eps=request.eps,
-            min_samples=request.min_samples
-        )
+        stats = await _process_and_save_articles(articles_dict, request.eps, request.min_samples, db)
 
-        cluster_summaries_tasks = []
-        cluster_data_list = []
-        
-        for cluster_data in result['clusters']:
-            articles_texts = []
-            for article_data in cluster_data['articles']:
-                text = article_data['title']
-                if article_data.get('summary'):
-                    text += f"\n{article_data['summary']}"
-                articles_texts.append(text)
-            
-            cluster_data_list.append(cluster_data)
-            cluster_summaries_tasks.append(generate_cluster_summary(articles_texts))
-
-        cluster_summaries = await asyncio.gather(*cluster_summaries_tasks, return_exceptions=True)
-        created_clusters = {}
-        created_articles = {}
-        
-        for idx, cluster_data in enumerate(cluster_data_list):
-            llm_summary = cluster_summaries[idx]
-            
-            if isinstance(llm_summary, Exception):
-                cluster_name = cluster_data.get('cluster_name', f"Кластер {cluster_data['cluster_id']}")
-                cluster_summary = cluster_data.get('cluster_summary', 'Автоматическое резюме недоступно')
-            else:
-                cluster_name = llm_summary['title']
-                cluster_summary = llm_summary['summary']
-            
-            cluster = Cluster(
-                cluster_number=int(cluster_data['cluster_id']),
-                name=cluster_name,
-                summary=cluster_summary
-            )
-            db.add(cluster)
-            db.flush()
-            created_clusters[cluster_data['cluster_id']] = cluster
-
-        for cluster_data in cluster_data_list:
-            cluster = created_clusters[cluster_data['cluster_id']]
-            
-            for article_data in cluster_data['articles']:
-                lowercase_hashtags = [tag.lower() for tag in article_data.get('hashtags', [])]
-
-                existing_article = db.query(Article).filter(Article.link == article_data['link']).first()
-                
-                if existing_article:
-                    article = existing_article
-                    article.title = article_data['title']
-                    article.summary = article_data.get('summary')
-                    article.short_summary = article_data.get('short_summary')
-                    article.hashtags = lowercase_hashtags
-                    article.entities = article_data.get('entities', {})
-                    article.author = article_data.get('author')
-                    article.cluster_id = cluster.id
-                else:
-                    article = Article(
-                        link=article_data['link'],
-                        title=article_data['title'],
-                        summary=article_data.get('summary'),
-                        short_summary=article_data.get('short_summary'),
-                        source=article_data.get('source'),
-                        published=article_data.get('published'),
-                        author=article_data.get('author'),
-                        hashtags=lowercase_hashtags,
-                        entities=article_data.get('entities', {}),
-                        cluster_id=cluster.id
-                    )
-                    db.add(article)
-                
-                db.flush()
-                created_articles[article_data['link']] = article
-        
-        for cluster_data in cluster_data_list:
-            for article_data in cluster_data['articles']:
-                article = created_articles[article_data['link']]
-                
-                related = article_data.get('related_articles_in_cluster', [])
-                if related:
-                    for rel_data in related:
-                        related_article = created_articles.get(rel_data['link'])
-                        if related_article and related_article not in article.related_articles:
-                            article.related_articles.append(related_article)
-        
-        db.commit()
-        
         return {
             "status": "success",
             "message": "RSS статьи успешно обработаны с LLM-суммаризацией",
             "statistics": {
-                "total_entries": rss_data.get("total_entries", 0),
-                "processed_articles": result['total_articles'],
-                "total_clusters": result['total_clusters'],
-                "clusters_created": len(created_clusters),
-                "articles_created": len(created_articles),
-                "time_range": rss_data.get("time_range", "unknown"),
-                "llm_summaries_generated": sum(1 for s in cluster_summaries if not isinstance(s, Exception))
+                "total_entries_in_file": rss_data.get("total_entries", 0),
+                "time_range_in_file": rss_data.get("time_range", "unknown"),
+                **stats
             }
         }
-        
     except Exception as e:
         db.rollback()
+        logger.error(f"Ошибка при обработке RSS: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Ошибка обработки: {str(e)}")
 
-@app.post("/api/v1/articles/process", tags=["Articles"])
-async def process_articles(
-    request: ProcessRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    try:
-        try:
-            from service_code import UnifiedNewsService
-        except ImportError:
-             raise HTTPException(status_code=500, detail="Service module 'service_code' not found.")
-        
-        service = UnifiedNewsService()
-        
-        articles_dict = [article.dict() for article in request.articles]
-        
-        result = service.process_articles(
-            articles_dict,
-            eps=request.eps,
-            min_samples=request.min_samples
-        )
-        
-        cluster_summaries_tasks = []
-        cluster_data_list = []
-        
-        for cluster_data in result['clusters']:
-            articles_texts = []
-            for article_data in cluster_data['articles']:
-                text = article_data['title']
-                if article_data.get('summary'):
-                    text += f"\n{article_data['summary']}"
-                articles_texts.append(text)
-            
-            cluster_data_list.append(cluster_data)
-            cluster_summaries_tasks.append(generate_cluster_summary(articles_texts))
-        
-        cluster_summaries = await asyncio.gather(*cluster_summaries_tasks, return_exceptions=True)
-        
-        created_clusters = {}
-        created_articles = {}
-        
-        for idx, cluster_data in enumerate(cluster_data_list):
-            llm_summary = cluster_summaries[idx]
-            
-            if isinstance(llm_summary, Exception):
-                cluster_name = cluster_data.get('cluster_name', f"Кластер {cluster_data['cluster_id']}")
-                cluster_summary = cluster_data.get('cluster_summary', 'Автоматическое резюме недоступно')
-            else:
-                cluster_name = llm_summary['title']
-                cluster_summary = llm_summary['summary']
-            
-            cluster = Cluster(
-                cluster_number=int(cluster_data['cluster_id']),
-                name=cluster_name,
-                summary=cluster_summary
-            )
-            db.add(cluster)
-            db.flush()
-            created_clusters[cluster_data['cluster_id']] = cluster
-        
-        for cluster_data in cluster_data_list:
-            cluster = created_clusters[cluster_data['cluster_id']]
-            
-            for article_data in cluster_data['articles']:
-                lowercase_hashtags = [tag.lower() for tag in article_data.get('hashtags', [])]
 
-                existing_article = db.query(Article).filter(Article.link == article_data['link']).first()
-                
-                if existing_article:
-                    article = existing_article
-                    article.title = article_data['title']
-                    article.summary = article_data.get('summary')
-                    article.short_summary = article_data.get('short_summary')
-                    article.hashtags = lowercase_hashtags
-                    article.entities = article_data.get('entities', {})
-                    article.author = article_data.get('author')
-                    article.cluster_id = cluster.id
-                else:
-                    article = Article(
-                        link=article_data['link'],
-                        title=article_data['title'],
-                        summary=article_data.get('summary'),
-                        short_summary=article_data.get('short_summary'),
-                        source=article_data.get('source'),
-                        published=article_data.get('published'),
-                        author=article_data.get('author'),
-                        hashtags=lowercase_hashtags,
-                        entities=article_data.get('entities', {}),
-                        cluster_id=cluster.id
-                    )
-                    db.add(article)
-                
-                db.flush()
-                created_articles[article_data['link']] = article
-        
-        for cluster_data in cluster_data_list:
-            for article_data in cluster_data['articles']:
-                article = created_articles[article_data['link']]
-                
-                related = article_data.get('related_articles_in_cluster', [])
-                if related:
-                    for rel_data in related:
-                        related_article = created_articles.get(rel_data['link'])
-                        if related_article and related_article not in article.related_articles:
-                            article.related_articles.append(related_article)
-        
-        db.commit()
+@app.post("/api/v1/articles/process", tags=["Articles"])
+async def process_articles(request: ProcessRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    try:
+        articles_dict = [article.dict() for article in request.articles]
+        stats = await _process_and_save_articles(articles_dict, request.eps, request.min_samples, db)
         
         return {
             "status": "success",
-            "message": "Статьи обработаны с LLM-суммаризацией",
-            "statistics": {
-                "total_articles": result['total_articles'],
-                "total_clusters": result['total_clusters'],
-                "clusters_created": len(created_clusters),
-                "articles_created": len(created_articles),
-                "llm_summaries_generated": sum(1 for s in cluster_summaries if not isinstance(s, Exception))
-            }
+            "message": "Статьи успешно обработаны с LLM-суммаризацией",
+            "statistics": stats
         }
-        
     except Exception as e:
         db.rollback()
+        logger.error(f"Ошибка при обработке статей: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Ошибка обработки: {str(e)}")
 
 @app.get("/api/v1/articles", response_model=List[ArticleResponse], tags=["Articles"])
@@ -762,8 +645,9 @@ async def get_articles(
         query = query.filter(Article.cluster_id == cluster_id)
 
     if hashtags:
-        lowercase_hashtags = [tag.lower() for tag in hashtags]
-        query = query.filter(Article.hashtags.contains(lowercase_hashtags))
+        normalized_tags = normalize_hashtags(hashtags)
+        if normalized_tags:
+            query = query.filter(Article.hashtags.contains(normalized_tags))
         
     articles = query.offset(skip).limit(limit).all()
     
@@ -786,6 +670,7 @@ async def get_articles(
         })
     print(f"articles: {len(result)}")
     return result
+
 
 @app.get("/api/v1/articles/{article_id}", response_model=ArticleResponse, tags=["Articles"])
 async def get_article(
@@ -815,6 +700,7 @@ async def get_article(
         "related_articles": related
     }
 
+
 @app.post("/api/v1/articles/{article_id}/read", tags=["User Actions"])
 async def mark_article_read(
     article_id: uuid.UUID,
@@ -838,8 +724,9 @@ async def mark_article_read(
     
     for entity_list in (article.entities or {}).values():
         for entity in entity_list:
-            normalized_entity = entity.lower()
-            topics_dict[normalized_entity] = topics_dict.get(normalized_entity, 0) + 1
+            normalized_entity = normalize_hashtag(entity)
+            if normalized_entity:
+                topics_dict[normalized_entity] = topics_dict.get(normalized_entity, 0) + 1
             
     current_user.interested_hashtags = topics_dict
     
@@ -885,6 +772,7 @@ async def get_clusters(
     print(f"clusters: {len(result)}")
     return result
 
+
 @app.get("/api/v1/clusters/{cluster_id}", tags=["Clusters"])
 async def get_cluster(
     cluster_id: uuid.UUID,
@@ -919,7 +807,7 @@ async def get_cluster(
         "articles": articles
     }
 
-# ==================== HASHTAGS ENDPOINTS (НОВЫЙ РАЗДЕЛ) ====================
+# ==================== HASHTAGS ENDPOINTS ====================
 
 @app.get("/api/v1/hashtags", response_model=List[str], tags=["Hashtags"])
 async def get_hashtags(
@@ -935,7 +823,9 @@ async def get_hashtags(
     query = db.query(func.unnest(Article.hashtags).label("hashtag")).distinct()
     
     if search:
-        query = query.filter(func.unnest(Article.hashtags).ilike(f"%{search.lower()}%"))
+        normalized_search = normalize_hashtag(search)
+        if normalized_search:
+            query = query.filter(func.unnest(Article.hashtags).ilike(f"%{normalized_search}%"))
 
     results = query.limit(limit).all()
     
@@ -972,7 +862,9 @@ async def get_recommendations(
         article_topics = set(article.hashtags or [])
         for entity_list in (article.entities or {}).values():
             for entity in entity_list:
-                article_topics.add(entity.lower())
+                normalized_entity = normalize_hashtag(entity)
+                if normalized_entity:
+                    article_topics.add(normalized_entity)
 
         for topic in article_topics:
             if topic in user_topics:
@@ -1031,7 +923,7 @@ async def get_recommendations(
             "score": round(item['score'], 2),
             "reason": item['reason']
         })
-    print(f"clusters: {len(recommendations)}")
+    print(f"recommendations: {len(recommendations)}")
     return {"recommendations": recommendations}
 
 # ==================== USER PROFILE ====================
@@ -1106,7 +998,8 @@ async def root():
             "Automatic RSS JSON processing",
             "News clustering with DBSCAN",
             "Personalized recommendations",
-            "User interest tracking"
+            "User interest tracking",
+            "Normalized hashtags (format: #tag_name)"
         ],
         "endpoints": {
             "docs": "/docs",
@@ -1114,6 +1007,7 @@ async def root():
             "recommendations": "/api/v1/recommendations"
         }
     }
+
 
 @app.get("/health", tags=["General"])
 async def health_check(db: Session = Depends(get_db)):
@@ -1133,6 +1027,7 @@ async def health_check(db: Session = Depends(get_db)):
         "rss_file_path": str(RSS_JSON_PATH),
         "timestamp": datetime.utcnow().isoformat()
     }
+
 # ==================== ЗАПУСК ====================
 
 if __name__ == "__main__":

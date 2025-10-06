@@ -71,11 +71,6 @@ services:
     volumes:
       - ./rss_parser/input:/app/input:ro
       - ./rss_parser/output:/app/output
-    depends_on:
-      postgres:
-        condition: service_healthy
-      sglang:
-        condition: service_healthy
     restart: unless-stopped
     networks:
       - news_network
@@ -90,7 +85,7 @@ services:
     environment:
       DATABASE_URL: postgresql://news_user:${DB_PASSWORD:-secure_password_123}@postgres:5432/news_db
       SECRET_KEY: ${SECRET_KEY:-your_secret_key_here_change_in_production}
-      SGLANG_URL: http://sglang:30000
+      SGLANG_URL: http://sglang:30000/v1
     volumes:
       - ./rss_parser/output:/app/rss_parser/output:ro
     depends_on:

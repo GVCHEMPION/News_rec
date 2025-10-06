@@ -102,7 +102,6 @@
             border-color: var(--accent);
         }
         
-        /* Стили для анимации кнопки "Прочитано" */
         .btn-marked-read {
             background: var(--success);
             color: white;
@@ -217,8 +216,8 @@
             border-left: 4px solid var(--accent);
             box-shadow: 0 2px 8px var(--shadow);
             transition: all 0.3s, transform 0.5s ease, max-height 0.5s ease-out, opacity 0.5s ease-out;
-            max-height: 500px; /* Изначальная высота для анимации схлопывания */
-            overflow: hidden;
+            max-height: none;
+            overflow: visible;
         }
 
         .article-card:hover {
@@ -226,7 +225,6 @@
             box-shadow: 0 4px 16px var(--shadow);
         }
         
-        /* CSS класс для плавного скрытия карточки */
         .article-card.fading-out {
             opacity: 0;
             transform: translateX(30px);
@@ -255,6 +253,19 @@
         .article-summary {
             color: var(--text-secondary);
             margin-bottom: 15px;
+            max-height: 120px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: -webkit-box;
+            -webkit-line-clamp: 5;
+            -webkit-box-orient: vertical;
+        }
+
+        @media (max-width: 768px) {
+            .article-summary {
+                max-height: 90px;
+                -webkit-line-clamp: 4;
+            }
         }
 
         .hashtags {
@@ -411,13 +422,11 @@
             <div class="logo">📰 News Platform</div>
             <div class="header-actions">
                 <button class="theme-toggle" onclick="toggleTheme()">🌓</button>
-                <!-- ИЗМЕНЕНИЕ: onclick теперь вызывает toggleProfileView() -->
                 <button id="profileBtn" class="btn-secondary" onclick="toggleProfileView()">Профиль</button>
                 <button class="btn-secondary" onclick="logout()">Выход</button>
             </div>
         </header>
 
-        <!-- Auth Form -->
         <div id="authForm" class="auth-form">
             <h2>Добро пожаловать</h2>
             <div id="authError"></div>
@@ -433,7 +442,6 @@
             <button class="btn-secondary" style="width: 100%;" onclick="register()">Регистрация</button>
         </div>
 
-        <!-- Source Selection -->
         <div id="sourcesSelection" class="sources-selection">
             <h2 style="text-align: center; margin-bottom: 20px; color: var(--accent);">Выберите источники новостей</h2>
             <p style="text-align: center; color: var(--text-secondary); margin-bottom: 30px;">
@@ -445,7 +453,6 @@
             </div>
         </div>
 
-        <!-- Main Content -->
         <div id="mainContent" class="hidden">
             <div class="tabs">
                 <button class="tab active" onclick="showTab('recommendations')">🎯 Рекомендации</button>
@@ -475,15 +482,13 @@
     </div>
 
     <script>
-        const API_URL = 'http://localhost:8000/api/v1';
+        const API_URL = 'https://testsfsf.cloudpub.ru/api/v1';
         let token = null;
         let selectedSources = new Set();
         let allSources = {};
         let currentTab = 'recommendations';
-        // ИЗМЕНЕНИЕ: Переменная для хранения последней активной вкладки
         let lastActiveTab = 'recommendations';
 
-        // Theme
         function toggleTheme() {
             const html = document.documentElement;
             const current = html.getAttribute('data-theme');
@@ -501,7 +506,6 @@
             }
         }
 
-        // Auth
         async function register() {
             const login = document.getElementById('loginInput').value.trim();
             const password = document.getElementById('passwordInput').value.trim();
@@ -526,19 +530,31 @@
 
         function logout() {
             token = null;
+            selectedSources.clear();
+            allSources = {};
             localStorage.removeItem('token');
             document.getElementById('authForm').classList.remove('hidden');
             document.getElementById('header').classList.add('hidden');
             document.getElementById('mainContent').classList.add('hidden');
-            document.getElementById('sourcesSelection').classList.add('hidden');
+            document.getElementById('sourcesSelection').style.display = 'none';
+            document.getElementById('loginInput').value = '';
+            document.getElementById('passwordInput').value = '';
         }
 
-        // Sources
         async function loadSources() {
             try {
                 const response = await fetch(`${API_URL}/rss/info`, { headers: { 'Authorization': `Bearer ${token}` } });
                 const data = await response.json();
-                if (response.ok) { allSources = data.sources || {}; displaySources(); document.getElementById('authForm').classList.add('hidden'); document.getElementById('sourcesSelection').style.display = 'block'; }
+                if (response.ok) { 
+                    allSources = data.sources || {}; 
+                    if (Object.keys(allSources).length === 0) {
+                        showMainContent();
+                        return;
+                    }
+                    displaySources(); 
+                    document.getElementById('authForm').classList.add('hidden'); 
+                    document.getElementById('sourcesSelection').style.display = 'block'; 
+                }
             } catch (error) { console.error('Error loading sources:', error); showMainContent(); }
         }
 
@@ -564,7 +580,6 @@
             showMainContent();
         }
 
-        // Main content
         function showMainContent() {
             document.getElementById('authForm').classList.add('hidden');
             document.getElementById('header').classList.remove('hidden');
@@ -572,9 +587,7 @@
             loadRecommendations();
         }
 
-        // ИЗМЕНЕНИЕ: Функция принимает второй аргумент - элемент, чтобы подсветить нужный таб
         function showTab(tab, element = null) {
-            // Если мы переключаемся с профиля на обычную вкладку, меняем текст кнопки
             if (currentTab === 'profile') {
                 document.getElementById('profileBtn').innerText = 'Профиль';
             }
@@ -595,26 +608,56 @@
             const container = document.getElementById('recommendations');
             container.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка рекомендаций...</div>';
             try {
-                const response = await fetch(`${API_URL}/recommendations?top_n=10`, { headers: { 'Authorization': `Bearer ${token}` } });
+                const response = await fetch(`${API_URL}/recommendations?top_n=10`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (response.status === 401) {
+                    logout();
+                    alert('Сессия истекла. Войдите снова.');
+                    return;
+                }
+
                 const data = await response.json();
-                if (response.ok && data.recommendations && data.recommendations.length > 0) { container.innerHTML = ''; displayArticles(data.recommendations, container, true); } 
-                else { container.innerHTML = '<p style="text-align: center; color: var(--text-secondary);">Для вас пока нет персональных рекомендаций. Прочитайте несколько статей из вкладки "Все статьи", чтобы мы могли узнать ваши интересы!</p>'; }
-            } catch (error) { container.innerHTML = '<p style="text-align: center; color: var(--accent);">Ошибка загрузки</p>'; }
+                if (response.ok && Array.isArray(data.recommendations) && data.recommendations.length > 0) {
+                    container.innerHTML = '';
+                    displayArticles(data.recommendations, container, true);
+                } else {
+                    container.innerHTML = '<p style="text-align: center; color: var(--text-secondary);">Пока нет персональных рекомендаций. Прочитайте несколько статей из вкладки «Все статьи».</p>';
+                }
+            } catch (error) {
+                console.error(error);
+                container.innerHTML = '<p style="text-align: center; color: var(--accent);">Ошибка загрузки рекомендаций</p>';
+            }
         }
 
         async function loadAllArticles() {
             const container = document.getElementById('allArticles');
             container.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка статей...</div>';
             try {
-                const response = await fetch(`${API_URL}/articles?limit=50`, { headers: { 'Authorization': `Bearer ${token}` } });
+                const response = await fetch(`${API_URL}/articles?limit=50`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (response.status === 401) {
+                    logout();
+                    alert('Сессия истекла. Войдите снова.');
+                    return;
+                }
+
                 const articles = await response.json();
-                if (response.ok) {
+                if (response.ok && Array.isArray(articles) && articles.length > 0) {
                     container.innerHTML = '';
                     shuffleArray(articles);
                     const randomArticles = articles.slice(0, 10);
                     displayArticles(randomArticles, container, false);
+                } else {
+                    container.innerHTML = '<p style="text-align: center; color: var(--text-secondary);">Статей не найдено</p>';
                 }
-            } catch (error) { container.innerHTML = '<p style="text-align: center; color: var(--accent);">Ошибка загрузки</p>'; }
+            } catch (error) {
+                console.error(error);
+                container.innerHTML = '<p style="text-align: center; color: var(--accent);">Ошибка загрузки статей</p>';
+            }
         }
 
         async function loadClusters() {
@@ -651,15 +694,39 @@
         }
 
         function displayArticles(articles, container, isRecommendation) {
-            if (!articles || articles.length === 0) { container.innerHTML += '<p style="text-align: center; color: var(--text-secondary);">Статей не найдено</p>'; return; }
+            if (!Array.isArray(articles) || articles.length === 0) {
+                container.innerHTML += '<p style="text-align: center; color: var(--text-secondary);">Статей не найдено</p>';
+                return;
+            }
+
             articles.forEach(item => {
-                const article = isRecommendation ? item.article : item;
-                if (selectedSources.size > 0 && article.source && !selectedSources.has(article.source)) return;
+                const article = isRecommendation && item.article ? item.article : item;
+                if (!article || !article.id) return;
+
+                const source = (article.source || '').toLowerCase();
+
+                if (selectedSources.size > 0 && source && !selectedSources.has(source)) return;
+
+                const hashtags = (article.hashtags || []).map(tag => `<span class="hashtag">#${tag}</span>`).join('');
                 const card = document.createElement('div');
                 card.className = 'article-card';
                 card.id = `article-card-${article.id}`;
-                const hashtags = (article.hashtags || []).map(tag => `<span class="hashtag">#${tag}</span>`).join('');
-                card.innerHTML = `${isRecommendation ? `<div class="recommendation-badge">⭐ ${item.reason} (${item.score})</div>` : ''}<div class="article-title">${article.title}</div><div class="article-meta"><span>📰 ${article.source || 'Unknown'}</span>${article.author ? `<span>✍️ ${article.author}</span>` : ''}${article.published ? `<span>📅 ${new Date(article.published).toLocaleDateString('ru-RU')}</span>` : ''}</div>${article.short_summary ? `<div class="article-summary">${article.short_summary}</div>` : ''}${hashtags ? `<div class="hashtags">${hashtags}</div>` : ''}<div class="article-actions"><button class="btn-primary btn-small" onclick="handleReadClick('${article.link}', '${article.id}')">Читать</button><button class="btn-secondary btn-small" onclick="markAsRead('${article.id}', this)">✓ Прочитано</button></div>`;
+
+                card.innerHTML = `
+                    ${isRecommendation && item.reason ? `<div class="recommendation-badge">⭐ ${item.reason} (${item.score?.toFixed?.(2) || '—'})</div>` : ''}
+                    <div class="article-title">${article.title || 'Без названия'}</div>
+                    <div class="article-meta">
+                        <span>📰 ${article.source || 'Неизвестный источник'}</span>
+                        ${article.author ? `<span>✍️ ${article.author}</span>` : ''}
+                        ${article.published ? `<span>📅 ${new Date(article.published).toLocaleDateString('ru-RU')}</span>` : ''}
+                    </div>
+                    ${article.short_summary ? `<div class="article-summary">${article.short_summary}</div>` : ''}
+                    ${hashtags ? `<div class="hashtags">${hashtags}</div>` : ''}
+                    <div class="article-actions">
+                        <button class="btn-primary btn-small" onclick="handleReadClick('${article.link}', '${article.id}')">Читать</button>
+                        <button class="btn-secondary btn-small" onclick="markAsRead('${article.id}', this)">✓ Прочитано</button>
+                    </div>
+                `;
                 container.appendChild(card);
             });
         }
@@ -673,29 +740,49 @@
             try {
                 const response = await fetch(`${API_URL}/articles/${articleId}/read`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } });
                 if (response.ok) {
-                    const cardElement = document.getElementById(`article-card-${articleId}`);
-                    if (!buttonElement && cardElement) { buttonElement = cardElement.querySelector('.btn-secondary'); }
-                    if (buttonElement) { buttonElement.innerText = 'Прочитано!'; buttonElement.classList.add('btn-marked-read'); buttonElement.disabled = true; }
-                    if (cardElement) { cardElement.classList.add('fading-out'); setTimeout(() => cardElement.remove(), 500); }
+                    // Находим карточку через кнопку, если она передана
+                    let cardElement = null;
+                    if (buttonElement) {
+                        cardElement = buttonElement.closest('.article-card');
+                    }
+                    // Если не нашли через кнопку, ищем по ID
+                    if (!cardElement) {
+                        cardElement = document.getElementById(`article-card-${articleId}`);
+                    }
+                    
+                    // Обновляем кнопку
+                    if (!buttonElement && cardElement) { 
+                        buttonElement = cardElement.querySelector('.btn-secondary:not(.btn-marked-read)'); 
+                    }
+                    if (buttonElement && !buttonElement.classList.contains('btn-marked-read')) { 
+                        buttonElement.innerText = 'Прочитано!'; 
+                        buttonElement.classList.add('btn-marked-read'); 
+                        buttonElement.disabled = true; 
+                    }
+                    
+                    // Анимация удаления
+                    if (cardElement && !cardElement.classList.contains('fading-out')) { 
+                        cardElement.classList.add('fading-out'); 
+                        setTimeout(() => {
+                            if (cardElement && cardElement.parentNode) {
+                                cardElement.remove();
+                            }
+                        }, 500); 
+                    }
                 }
             } catch (error) { console.error('Error marking as read:', error); }
         }
         
-        // ИЗМЕНЕНИЕ: Новая функция-переключатель для профиля
         function toggleProfileView() {
             const profileBtn = document.getElementById('profileBtn');
 
-            // Если профиль уже открыт, закрываем его и возвращаемся
             if (currentTab === 'profile') {
                 profileBtn.innerText = 'Профиль';
-                // Находим DOM-элемент последней активной вкладки
                 const lastTabElement = document.querySelector(`.tab[onclick*="'${lastActiveTab}'"]`);
-                // Переключаемся на нее
                 showTab(lastActiveTab, lastTabElement);
             } 
-            // Иначе, открываем профиль
             else {
-                lastActiveTab = currentTab; // Запоминаем, где мы были
+                lastActiveTab = currentTab;
                 currentTab = 'profile';
                 profileBtn.innerText = 'К новостям';
 
@@ -704,11 +791,10 @@
                 
                 const profileTab = document.getElementById('profileTab');
                 profileTab.classList.remove('hidden');
-                loadProfileData(); // Загружаем данные для профиля
+                loadProfileData();
             }
         }
 
-        // ИЗМЕНЕНИЕ: Логика загрузки данных вынесена в отдельную функцию
         async function loadProfileData() {
             const container = document.getElementById('profileContent');
             container.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка профиля...</div>';
@@ -728,11 +814,26 @@
             setTimeout(() => el.innerHTML = '', 5000);
         }
 
-        const savedToken = localStorage.getItem('token');
-        if (savedToken) {
+        async function init() {
+            const savedToken = localStorage.getItem('token');
+            if (!savedToken) return;
             token = savedToken;
-            showMainContent();
+
+            try {
+                const resp = await fetch(`${API_URL}/profile`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (resp.ok) {
+                    showMainContent();
+                } else {
+                    logout();
+                }
+            } catch {
+                logout();
+            }
         }
+
+        document.addEventListener('DOMContentLoaded', init);
     </script>
 </body>
 </html>

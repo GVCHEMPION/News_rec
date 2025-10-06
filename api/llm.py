@@ -44,7 +44,7 @@ class TextClusterAnalyzer:
         if not texts:
             raise ValueError("Список текстов не может быть пустым")
     
-        texts_formatted = "\n\n".join([f"Текст {i+1}:\n{text}" for i, text in enumerate(texts)])
+        texts_formatted = "\n\n".join([f"Текст {i+1}:\n{text}" for i, text in enumerate(texts)])[:3500]
         
         prompt = f"""
 Проанализируй следующий кластер текстов и создай для него заголовок и краткое содержание.
@@ -64,7 +64,7 @@ class TextClusterAnalyzer:
             response_format=ClusterAnalysis,
             temperature=0.7
         )
-        print(type(completion.choices[0].message.parsed))
+        # print(type(completion.choices[0].message.parsed))
         return completion.choices[0].message.parsed
     
     async def analyze_multiple_clusters(self, clusters: List[List[str]]) -> List[ClusterAnalysis]:
