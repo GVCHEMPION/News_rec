@@ -482,7 +482,8 @@
     </div>
 
     <script>
-        const API_URL = 'https://testsfsf.cloudpub.ru/api/v1';
+        // const API_URL = 'https://testsfsf.cloudpub.ru/api/v1';
+        const API_URL = 'http://localhost:8000/api/v1';
         let token = null;
         let selectedSources = new Set();
         let allSources = {};
@@ -509,23 +510,61 @@
         async function register() {
             const login = document.getElementById('loginInput').value.trim();
             const password = document.getElementById('passwordInput').value.trim();
-            if (!login || !password) { showError('authError', 'Заполните все поля'); return; }
+            if (!login || !password) { 
+                showError('authError', 'Заполните все поля'); 
+                return; 
+            }
             try {
-                const response = await fetch(`${API_URL}/auth/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login, password }) });
+                const response = await fetch(`${API_URL}/auth/register`, { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify({ login, password }) 
+                });
                 const data = await response.json();
-                if (response.ok) { token = data.access_token; localStorage.setItem('token', token); await loadSources(); } else { showError('authError', data.detail || 'Ошибка регистрации'); }
-            } catch (error) { showError('authError', 'Ошибка подключения к серверу'); }
+                
+                console.log('Register response:', response.status, data);
+                
+                if (response.ok) { 
+                    token = data.access_token; 
+                    localStorage.setItem('token', token); 
+                    await loadSources(); 
+                } else { 
+                    showError('authError', data.detail || 'Ошибка регистрации'); 
+                }
+            } catch (error) { 
+                console.error('Register error:', error);
+                showError('authError', 'Ошибка подключения к серверу'); 
+            }
         }
 
         async function login() {
             const login = document.getElementById('loginInput').value.trim();
             const password = document.getElementById('passwordInput').value.trim();
-            if (!login || !password) { showError('authError', 'Заполните все поля'); return; }
+            if (!login || !password) { 
+                showError('authError', 'Заполните все поля'); 
+                return; 
+            }
             try {
-                const response = await fetch(`${API_URL}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login, password }) });
+                const response = await fetch(`${API_URL}/auth/login`, { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify({ login, password }) 
+                });
                 const data = await response.json();
-                if (response.ok) { token = data.access_token; localStorage.setItem('token', token); showMainContent(); } else { showError('authError', data.detail || 'Неверный логин или пароль'); }
-            } catch (error) { showError('authError', 'Ошибка подключения к серверу'); }
+                
+                console.log('Login response:', response.status, data);
+                
+                if (response.ok) { 
+                    token = data.access_token; 
+                    localStorage.setItem('token', token); 
+                    showMainContent(); 
+                } else { 
+                    showError('authError', data.detail || 'Неверный логин или пароль'); 
+                }
+            } catch (error) { 
+                console.error('Login error:', error);
+                showError('authError', 'Ошибка подключения к серверу'); 
+            }
         }
 
         function logout() {
@@ -543,36 +582,75 @@
 
         async function loadSources() {
             try {
-                const response = await fetch(`${API_URL}/rss/info`, { headers: { 'Authorization': `Bearer ${token}` } });
+                const response = await fetch(`${API_URL}/rss/info`, { 
+                    headers: { 'Authorization': `Bearer ${token}` } 
+                });
                 const data = await response.json();
+                
+                console.log('Sources response:', response.status, data);
+                
                 if (response.ok) { 
-                    allSources = data.sources || {}; 
+                    allSources = data.sources || {};
+                    
+                    // Нормализуем источники в нижний регистр для сравнения
+                    const normalizedSources = {};
+                    Object.entries(allSources).forEach(([source, count]) => {
+                        const normalizedKey = source.toLowerCase();
+                        normalizedSources[normalizedKey] = {
+                            original: source,
+                            count: count
+                        };
+                    });
+                    
+                    console.log('Normalized sources:', normalizedSources);
+                    
                     if (Object.keys(allSources).length === 0) {
+                        console.log('No sources available, showing main content');
                         showMainContent();
                         return;
                     }
-                    displaySources(); 
+                    displaySources(normalizedSources); 
                     document.getElementById('authForm').classList.add('hidden'); 
                     document.getElementById('sourcesSelection').style.display = 'block'; 
+                } else {
+                    console.log('Failed to load sources, showing main content anyway');
+                    showMainContent();
                 }
-            } catch (error) { console.error('Error loading sources:', error); showMainContent(); }
+            } catch (error) { 
+                console.error('Error loading sources:', error); 
+                showMainContent(); 
+            }
         }
 
-        function displaySources() {
+        function displaySources(normalizedSources) {
             const grid = document.getElementById('sourcesGrid');
             grid.innerHTML = '';
-            Object.entries(allSources).forEach(([source, count]) => {
-                selectedSources.add(source);
+            
+            Object.entries(normalizedSources).forEach(([normalizedKey, data]) => {
+                const source = data.original;
+                const count = data.count;
+                
+                // Добавляем нормализованный ключ в selectedSources
+                selectedSources.add(normalizedKey);
+                
                 const card = document.createElement('div');
                 card.className = 'source-card selected';
                 card.innerHTML = `<div><strong>${source}</strong></div><div class="source-count">${count} статей</div>`;
-                card.onclick = () => toggleSource(source, card);
+                card.onclick = () => toggleSource(normalizedKey, card);
                 grid.appendChild(card);
             });
+            
+            console.log('Initial selected sources:', Array.from(selectedSources));
         }
 
         function toggleSource(source, element) {
-            if (selectedSources.has(source)) { selectedSources.delete(source); element.classList.remove('selected'); } else { selectedSources.add(source); element.classList.add('selected'); }
+            if (selectedSources.has(source)) { 
+                selectedSources.delete(source); 
+                element.classList.remove('selected'); 
+            } else { 
+                selectedSources.add(source); 
+                element.classList.add('selected'); 
+            }
         }
 
         async function confirmSources() {
@@ -582,6 +660,7 @@
 
         function showMainContent() {
             document.getElementById('authForm').classList.add('hidden');
+            document.getElementById('sourcesSelection').style.display = 'none';
             document.getElementById('header').classList.remove('hidden');
             document.getElementById('mainContent').classList.remove('hidden');
             loadRecommendations();
@@ -597,20 +676,34 @@
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             if(tabElement) tabElement.classList.add('active');
 
-            ['recommendationsTab', 'allTab', 'clustersTab', 'profileTab'].forEach(id => document.getElementById(id).classList.add('hidden'));
+            ['recommendationsTab', 'allTab', 'clustersTab', 'profileTab'].forEach(id => 
+                document.getElementById(id).classList.add('hidden')
+            );
             
-            if (tab === 'recommendations') { document.getElementById('recommendationsTab').classList.remove('hidden'); loadRecommendations(); } 
-            else if (tab === 'all') { document.getElementById('allTab').classList.remove('hidden'); loadAllArticles(); } 
-            else if (tab === 'clusters') { document.getElementById('clustersTab').classList.remove('hidden'); loadClusters(); }
+            if (tab === 'recommendations') { 
+                document.getElementById('recommendationsTab').classList.remove('hidden'); 
+                loadRecommendations(); 
+            } 
+            else if (tab === 'all') { 
+                document.getElementById('allTab').classList.remove('hidden'); 
+                loadAllArticles(); 
+            } 
+            else if (tab === 'clusters') { 
+                document.getElementById('clustersTab').classList.remove('hidden'); 
+                loadClusters(); 
+            }
         }
 
         async function loadRecommendations() {
             const container = document.getElementById('recommendations');
             container.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка рекомендаций...</div>';
+            
             try {
                 const response = await fetch(`${API_URL}/recommendations?top_n=10`, {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
+
+                console.log('Recommendations response status:', response.status);
 
                 if (response.status === 401) {
                     logout();
@@ -619,25 +712,34 @@
                 }
 
                 const data = await response.json();
-                if (response.ok && Array.isArray(data.recommendations) && data.recommendations.length > 0) {
-                    container.innerHTML = '';
-                    displayArticles(data.recommendations, container, true);
+                console.log('Recommendations data:', data);
+                
+                if (response.ok) {
+                    if (Array.isArray(data.recommendations) && data.recommendations.length > 0) {
+                        container.innerHTML = '';
+                        displayArticles(data.recommendations, container, true);
+                    } else {
+                        container.innerHTML = '<p style="text-align: center; color: var(--text-secondary); padding: 40px;">Пока нет персональных рекомендаций. Прочитайте несколько статей из вкладки «Все статьи», чтобы мы могли подобрать для вас интересный контент.</p>';
+                    }
                 } else {
-                    container.innerHTML = '<p style="text-align: center; color: var(--text-secondary);">Пока нет персональных рекомендаций. Прочитайте несколько статей из вкладки «Все статьи».</p>';
+                    container.innerHTML = '<p style="text-align: center; color: var(--text-secondary); padding: 40px;">Пока нет персональных рекомендаций. Прочитайте несколько статей из вкладки «Все статьи».</p>';
                 }
             } catch (error) {
-                console.error(error);
-                container.innerHTML = '<p style="text-align: center; color: var(--accent);">Ошибка загрузки рекомендаций</p>';
+                console.error('Recommendations error:', error);
+                container.innerHTML = '<p style="text-align: center; color: var(--accent); padding: 40px;">Ошибка загрузки рекомендаций. Попробуйте перезагрузить страницу.</p>';
             }
         }
 
         async function loadAllArticles() {
             const container = document.getElementById('allArticles');
             container.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка статей...</div>';
+            
             try {
                 const response = await fetch(`${API_URL}/articles?limit=50`, {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
+
+                console.log('Articles response status:', response.status);
 
                 if (response.status === 401) {
                     logout();
@@ -646,66 +748,120 @@
                 }
 
                 const articles = await response.json();
-                if (response.ok && Array.isArray(articles) && articles.length > 0) {
-                    container.innerHTML = '';
-                    shuffleArray(articles);
-                    const randomArticles = articles.slice(0, 10);
-                    displayArticles(randomArticles, container, false);
+                console.log('Articles data:', articles);
+                
+                if (response.ok) {
+                    if (Array.isArray(articles) && articles.length > 0) {
+                        container.innerHTML = '';
+                        shuffleArray(articles);
+                        const randomArticles = articles.slice(0, 10);
+                        displayArticles(randomArticles, container, false);
+                    } else {
+                        container.innerHTML = '<p style="text-align: center; color: var(--text-secondary); padding: 40px;">Статей не найдено. Возможно, база данных пуста.</p>';
+                    }
                 } else {
-                    container.innerHTML = '<p style="text-align: center; color: var(--text-secondary);">Статей не найдено</p>';
+                    container.innerHTML = '<p style="text-align: center; color: var(--text-secondary); padding: 40px;">Не удалось загрузить статьи.</p>';
                 }
             } catch (error) {
-                console.error(error);
-                container.innerHTML = '<p style="text-align: center; color: var(--accent);">Ошибка загрузки статей</p>';
+                console.error('Articles error:', error);
+                container.innerHTML = '<p style="text-align: center; color: var(--accent); padding: 40px;">Ошибка загрузки статей. Проверьте подключение к серверу.</p>';
             }
         }
 
         async function loadClusters() {
             const container = document.getElementById('clustersList');
             container.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка кластеров...</div>';
+            
             try {
-                const response = await fetch(`${API_URL}/clusters?limit=30`, { headers: { 'Authorization': `Bearer ${token}` } });
+                const response = await fetch(`${API_URL}/clusters?limit=30`, { 
+                    headers: { 'Authorization': `Bearer ${token}` } 
+                });
+                
+                console.log('Clusters response status:', response.status);
+                
                 const clusters = await response.json();
-                if (response.ok) {
+                console.log('Clusters data:', clusters);
+                
+                if (response.ok && Array.isArray(clusters) && clusters.length > 0) {
                     container.innerHTML = '';
                     clusters.forEach(cluster => {
                         const card = document.createElement('div');
                         card.className = 'article-card';
                         card.style.cursor = 'pointer';
-                        card.innerHTML = `<div class="article-title">${cluster.name}</div><div class="article-summary">${cluster.summary}</div><div style="color: var(--text-secondary); font-size: 13px;">📊 ${cluster.articles_count} статей</div>`;
+                        card.innerHTML = `
+                            <div class="article-title">${cluster.name || 'Кластер без названия'}</div>
+                            <div class="article-summary">${cluster.summary || 'Описание отсутствует'}</div>
+                            <div style="color: var(--text-secondary); font-size: 13px;">📊 ${cluster.articles_count || 0} статей</div>
+                        `;
                         card.onclick = () => loadClusterArticles(cluster.id);
                         container.appendChild(card);
                     });
+                } else {
+                    container.innerHTML = '<p style="text-align: center; color: var(--text-secondary); padding: 40px;">Кластеры не найдены</p>';
                 }
-            } catch (error) { container.innerHTML = '<p style="text-align: center; color: var(--accent);">Ошибка загрузки</p>'; }
+            } catch (error) { 
+                console.error('Clusters error:', error);
+                container.innerHTML = '<p style="text-align: center; color: var(--accent); padding: 40px;">Ошибка загрузки кластеров</p>'; 
+            }
         }
 
         async function loadClusterArticles(clusterId) {
             const container = document.getElementById('clustersList');
             container.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка статей кластера...</div>';
+            
             try {
-                const response = await fetch(`${API_URL}/clusters/${clusterId}`, { headers: { 'Authorization': `Bearer ${token}` } });
+                const response = await fetch(`${API_URL}/clusters/${clusterId}`, { 
+                    headers: { 'Authorization': `Bearer ${token}` } 
+                });
                 const data = await response.json();
+                
+                console.log('Cluster articles data:', data);
+                
                 if (response.ok) {
-                    container.innerHTML = `<button class="btn-secondary" onclick="loadClusters()" style="margin-bottom: 20px;">← Назад к кластерам</button><h3 style="color: var(--accent); margin-bottom: 20px;">${data.name}</h3><p style="color: var(--text-secondary); margin-bottom: 30px;">${data.summary}</p>`;
-                    displayArticles(data.articles, container, false);
+                    container.innerHTML = `
+                        <button class="btn-secondary" onclick="loadClusters()" style="margin-bottom: 20px;">← Назад к кластерам</button>
+                        <h3 style="color: var(--accent); margin-bottom: 20px;">${data.name || 'Кластер'}</h3>
+                        <p style="color: var(--text-secondary); margin-bottom: 30px;">${data.summary || ''}</p>
+                    `;
+                    displayArticles(data.articles || [], container, false);
                 }
-            } catch (error) { container.innerHTML = '<p style="text-align: center; color: var(--accent);">Ошибка загрузки</p>'; }
+            } catch (error) { 
+                console.error('Cluster articles error:', error);
+                container.innerHTML = '<p style="text-align: center; color: var(--accent); padding: 40px;">Ошибка загрузки</p>'; 
+            }
         }
 
         function displayArticles(articles, container, isRecommendation) {
+            console.log('Displaying articles:', articles.length, 'Is recommendation:', isRecommendation);
+            console.log('Selected sources:', Array.from(selectedSources));
+            
             if (!Array.isArray(articles) || articles.length === 0) {
-                container.innerHTML += '<p style="text-align: center; color: var(--text-secondary);">Статей не найдено</p>';
+                container.innerHTML += '<p style="text-align: center; color: var(--text-secondary); padding: 40px;">Статей не найдено</p>';
                 return;
             }
 
+            let displayedCount = 0;
+
             articles.forEach(item => {
                 const article = isRecommendation && item.article ? item.article : item;
-                if (!article || !article.id) return;
+                
+                console.log('Processing article:', article);
+                
+                if (!article || !article.id) {
+                    console.log('Skipping invalid article');
+                    return;
+                }
 
                 const source = (article.source || '').toLowerCase();
+                
+                // Если источников не выбрано вообще, показываем все статьи
+                // Если источники выбраны, проверяем только непустые источники
+                if (selectedSources.size > 0 && source && source !== 'unknown' && !selectedSources.has(source)) {
+                    console.log('Filtering out source:', source);
+                    return;
+                }
 
-                if (selectedSources.size > 0 && source && !selectedSources.has(source)) return;
+                displayedCount++;
 
                 const hashtags = (article.hashtags || []).map(tag => `<span class="hashtag">#${tag}</span>`).join('');
                 const card = document.createElement('div');
@@ -729,6 +885,8 @@
                 `;
                 container.appendChild(card);
             });
+
+            console.log('Displayed articles count:', displayedCount);
         }
         
         function handleReadClick(link, articleId) {
@@ -738,19 +896,22 @@
 
         async function markAsRead(articleId, buttonElement = null) {
             try {
-                const response = await fetch(`${API_URL}/articles/${articleId}/read`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } });
+                const response = await fetch(`${API_URL}/articles/${articleId}/read`, { 
+                    method: 'POST', 
+                    headers: { 'Authorization': `Bearer ${token}` } 
+                });
+                
+                console.log('Mark as read response:', response.status);
+                
                 if (response.ok) {
-                    // Находим карточку через кнопку, если она передана
                     let cardElement = null;
                     if (buttonElement) {
                         cardElement = buttonElement.closest('.article-card');
                     }
-                    // Если не нашли через кнопку, ищем по ID
                     if (!cardElement) {
                         cardElement = document.getElementById(`article-card-${articleId}`);
                     }
                     
-                    // Обновляем кнопку
                     if (!buttonElement && cardElement) { 
                         buttonElement = cardElement.querySelector('.btn-secondary:not(.btn-marked-read)'); 
                     }
@@ -760,7 +921,6 @@
                         buttonElement.disabled = true; 
                     }
                     
-                    // Анимация удаления
                     if (cardElement && !cardElement.classList.contains('fading-out')) { 
                         cardElement.classList.add('fading-out'); 
                         setTimeout(() => {
@@ -770,7 +930,9 @@
                         }, 500); 
                     }
                 }
-            } catch (error) { console.error('Error marking as read:', error); }
+            } catch (error) { 
+                console.error('Error marking as read:', error); 
+            }
         }
         
         function toggleProfileView() {
@@ -787,7 +949,9 @@
                 profileBtn.innerText = 'К новостям';
 
                 document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-                ['recommendationsTab', 'allTab', 'clustersTab'].forEach(id => document.getElementById(id).classList.add('hidden'));
+                ['recommendationsTab', 'allTab', 'clustersTab'].forEach(id => 
+                    document.getElementById(id).classList.add('hidden')
+                );
                 
                 const profileTab = document.getElementById('profileTab');
                 profileTab.classList.remove('hidden');
@@ -798,14 +962,49 @@
         async function loadProfileData() {
             const container = document.getElementById('profileContent');
             container.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка профиля...</div>';
+            
             try {
-                const response = await fetch(`${API_URL}/profile`, { headers: { 'Authorization': `Bearer ${token}` } });
+                const response = await fetch(`${API_URL}/profile`, { 
+                    headers: { 'Authorization': `Bearer ${token}` } 
+                });
                 const data = await response.json();
+                
+                console.log('Profile data:', data);
+                
                 if (response.ok) {
-                    const topTopics = Object.entries(data.interests.top_topics || {}).map(([topic, count]) => `<span class="hashtag">${topic} (${count})</span>`).join('');
-                    container.innerHTML = `<div class="profile-stats"><div class="stat-card"><div class="stat-value">${data.statistics.read_articles_count}</div><div class="stat-label">Прочитано статей</div></div><div class="stat-card"><div class="stat-value">${data.statistics.unique_topics_count}</div><div class="stat-label">Интересов</div></div><div class="stat-card"><div class="stat-value">${data.statistics.unique_authors}</div><div class="stat-label">Авторов</div></div><div class="stat-card"><div class="stat-value">${data.statistics.preferred_clusters}</div><div class="stat-label">Кластеров</div></div></div><div style="margin-top: 30px;"><h3 style="color: var(--accent); margin-bottom: 15px;">Ваши интересы</h3><div class="hashtags">${topTopics || 'Пока нет данных'}</div></div>`;
+                    const topTopics = Object.entries(data.interests?.top_topics || {})
+                        .map(([topic, count]) => `<span class="hashtag">${topic} (${count})</span>`)
+                        .join('');
+                    
+                    container.innerHTML = `
+                        <div class="profile-stats">
+                            <div class="stat-card">
+                                <div class="stat-value">${data.statistics?.read_articles_count || 0}</div>
+                                <div class="stat-label">Прочитано статей</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value">${data.statistics?.unique_topics_count || 0}</div>
+                                <div class="stat-label">Интересов</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value">${data.statistics?.unique_authors || 0}</div>
+                                <div class="stat-label">Авторов</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value">${data.statistics?.preferred_clusters || 0}</div>
+                                <div class="stat-label">Кластеров</div>
+                            </div>
+                        </div>
+                        <div style="margin-top: 30px;">
+                            <h3 style="color: var(--accent); margin-bottom: 15px;">Ваши интересы</h3>
+                            <div class="hashtags">${topTopics || '<span style="color: var(--text-secondary);">Пока нет данных</span>'}</div>
+                        </div>
+                    `;
                 }
-            } catch (error) { container.innerHTML = '<p style="text-align: center; color: var(--accent);">Ошибка загрузки профиля</p>'; }
+            } catch (error) { 
+                console.error('Profile error:', error);
+                container.innerHTML = '<p style="text-align: center; color: var(--accent);">Ошибка загрузки профиля</p>'; 
+            }
         }
 
         function showError(elementId, message) {
@@ -823,12 +1022,16 @@
                 const resp = await fetch(`${API_URL}/profile`, {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
+                
+                console.log('Init profile check:', resp.status);
+                
                 if (resp.ok) {
                     showMainContent();
                 } else {
                     logout();
                 }
-            } catch {
+            } catch (error) {
+                console.error('Init error:', error);
                 logout();
             }
         }

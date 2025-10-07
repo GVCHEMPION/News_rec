@@ -8,8 +8,8 @@ from openai import AsyncOpenAI
 class ClusterAnalysis(BaseModel):
     reasoning_about_title: List[str] = Field(
         ..., 
-        min_length=2, 
-        max_length=3,
+        min_length=1, 
+        max_length=2,
         description="Рассуждения о выборе заголовка. Учитываем, что заголовок должен читаться"
     )
     title: str = Field(
@@ -18,8 +18,8 @@ class ClusterAnalysis(BaseModel):
     )
     reasoning_about_summary: List[str] = Field(
         ...,
-        min_length=3,
-        max_length=5,
+        min_length=1,
+        max_length=2,
         description="Рассуждения о создании саммари по всему класстеру"
     )
     summary: str = Field(
@@ -40,11 +40,33 @@ class TextClusterAnalyzer:
             
         self.client = AsyncOpenAI(**client_kwargs)
     
+    def _truncate_to_sentence(self, text: str, max_length: int) -> str:
+        if len(text) <= max_length:
+            return text
+
+        truncated = text[:max_length]
+
+        last_period = max(
+            truncated.rfind('.'),
+            truncated.rfind('!'),
+            truncated.rfind('?')
+        )
+
+        if last_period > 0:
+            return text[:last_period + 1]
+
+        last_space = truncated.rfind(' ')
+        if last_space > 0:
+            return text[:last_space] + "..."
+        
+        return text[:max_length - 3] + "..."
+    
     async def analyze_cluster(self, texts: List[str]) -> ClusterAnalysis:
         if not texts:
             raise ValueError("Список текстов не может быть пустым")
     
-        texts_formatted = "\n\n".join([f"Текст {i+1}:\n{text}" for i, text in enumerate(texts)])[:3500]
+        texts_formatted = "\n\n".join([f"Текст {i+1}:\n{text}" for i, text in enumerate(texts)])
+        texts_formatted = self._truncate_to_sentence(texts_formatted, 4000)
         
         prompt = f"""
 Проанализируй следующий кластер текстов и создай для него заголовок и краткое содержание.
@@ -80,6 +102,19 @@ class TextClusterAnalyzer:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.close()
 
+    async def analyze_multiple_clusters(self, clusters: List[List[str]]) -> List[ClusterAnalysis]:
+        tasks = [self.analyze_cluster(cluster) for cluster in clusters]
+        return await asyncio.gather(*tasks)
+    
+    async def close(self):
+        await self.client.close()
+    
+    async def __aenter__(self):
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+
 
 if __name__ == "__main__":
     
@@ -91,7 +126,7 @@ if __name__ == "__main__":
 
             api_key="not-needed",
 
-            model="Qwen/Qwen3-14B-AWQ" 
+            model="Qwen/Qwen3-4B-AWQ" 
         ) as analyzer:
             
             sample_texts = [

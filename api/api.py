@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 # ==================== DATABASE SETUP ====================
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://news_user:secure_password_123@postgres:5432/news_db")
 SECRET_KEY = os.getenv("SECRET_KEY", secrets.token_urlsafe(32))
-RSS_JSON_PATH = Path(os.getenv("RSS_JSON_PATH", "/app/rss_parser/output/rss_feed_24h.json"))
+RSS_JSON_PATH = Path(os.getenv("RSS_JSON_PATH", "/app/rss_parser/output/rss_feed_4h.json"))
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
@@ -146,7 +146,7 @@ class ProcessRequest(BaseModel):
 class RSSProcessRequest(BaseModel):
     eps: float = Field(0.4, ge=0.1, le=1.0, description="Параметр кластеризации DBSCAN")
     min_samples: int = Field(1, ge=1, le=10, description="Минимум статей в кластере")
-    json_path: Optional[str] = Field(None, description="Путь к JSON файлу (по умолчанию: /app/rss_parser/output/rss_feed_24h.json)")
+    json_path: Optional[str] = Field(None, description="Путь к JSON файлу (по умолчанию: /app/rss_parser/output/rss_feed_4h.json)")
 
 class ArticleResponse(BaseModel):
     id: uuid.UUID
@@ -262,18 +262,50 @@ def convert_rss_entries_to_articles(entries: List[Dict]) -> List[Dict]:
     articles = []
     
     for entry in entries:
+
+        source = None
+
+        if entry.get("source_title"):
+            source = entry["source_title"]
+
+        elif entry.get("source"):
+            if isinstance(entry["source"], dict):
+                source = entry["source"].get("title") or entry["source"].get("href")
+            elif isinstance(entry["source"], str):
+                source = entry["source"]
+
+        elif entry.get("link"):
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(entry["link"])
+                domain = parsed.netloc
+                # Убираем www. если есть
+                if domain.startswith("www."):
+                    domain = domain[4:]
+                source = domain
+            except Exception as e:
+                logger.debug(f"Не удалось извлечь источник из ссылки: {e}")
+
+        if not source and entry.get("feed_title"):
+            source = entry["feed_title"]
+
+        if not source:
+            source = "Unknown"
+        
         article = {
             "title": entry.get("title", "Без названия"),
             "summary": entry.get("full_text") or entry.get("summary"),
             "link": entry.get("link", ""),
-            "source": entry.get("source_title", "Unknown"),
+            "source": source,
             "published": entry.get("published", ""),
-            "author": entry.get("author", "Unknown")
+            "author": entry.get("author") if entry.get("author") else None
         }
         
         if article["link"]:
             articles.append(article)
+            logger.debug(f"Статья добавлена: {article['title'][:50]}... | Источник: {source}")
     
+    logger.info(f"Конвертировано {len(articles)} статей из {len(entries)} записей")
     return articles
 
 # ==================== FASTAPI APP ====================
@@ -299,20 +331,42 @@ cluster_analyzer = None
 async def generate_cluster_summary(articles_summaries: List[str]) -> Dict[str, Any]:
     if not cluster_analyzer:
         logger.error("Cluster analyzer не был инициализирован.")
-        raise HTTPException(status_code=503, detail="Сервис анализа кластеров недоступен.")
+        return {
+            "title": f"Кластер из {len(articles_summaries)} новостей",
+            "summary": "Сервис анализа кластеров недоступен."
+        }
     
     try:
-        analysis = await cluster_analyzer.analyze_cluster(articles_summaries)
-        logger.info(f"LLM сгенерировал заголовок: '{analysis.title}'")
+        logger.debug(f"Отправка запроса в LLM для анализа {len(articles_summaries)} статей...")
+        analysis = await asyncio.wait_for(
+            cluster_analyzer.analyze_cluster(articles_summaries),
+            timeout=None  # Таймаут 300 секунд
+        )
+        
+        if not analysis or not hasattr(analysis, 'title') or not hasattr(analysis, 'summary'):
+            logger.error(f"LLM вернул некорректный объект: {analysis}")
+            return {
+                "title": f"Кластер из {len(articles_summaries)} новостей",
+                "summary": "Не удалось сгенерировать автоматическое резюме."
+            }
+        
+        logger.info(f"✅ LLM успешно сгенерировал заголовок: '{analysis.title}'")
         return {
             "title": analysis.title,
             "summary": analysis.summary
         }
-    except Exception as e:
-        logger.error(f"Ошибка при генерации саммари кластера через LLM: {e}")
+        
+    except asyncio.TimeoutError:
+        logger.error(f"⏱️ Таймаут при генерации саммари кластера (>30 сек)")
         return {
             "title": f"Кластер из {len(articles_summaries)} новостей",
-            "summary": "Автоматическое резюме временно недоступно. Основные темы можно понять по заголовкам статей."
+            "summary": "Автоматическое резюме недоступно из-за таймаута."
+        }
+    except Exception as e:
+        logger.error(f"❌ Ошибка при генерации саммари кластера: {type(e).__name__}: {e}", exc_info=True)
+        return {
+            "title": f"Кластер из {len(articles_summaries)} новостей",
+            "summary": f"Автоматическое резюме временно недоступно. Основные темы можно понять по заголовкам статей."
         }
 
 async def process_rss_on_startup():
@@ -424,7 +478,7 @@ async def startup_event():
     cluster_analyzer = TextClusterAnalyzer(
         api_key=os.getenv("OPENAI_API_KEY", "not-needed"),
         base_url=os.getenv("SGLANG_URL", "http://sglang:30000/v1"),
-        model=os.getenv("OPENAI_MODEL", "Qwen/Qwen3-14B-AWQ")
+        model=os.getenv("OPENAI_MODEL", "Qwen/Qwen3-4B-AWQ")
     )
     asyncio.create_task(process_rss_on_startup())
     logger.info("Приложение запущено. Обработка RSS выполняется в фоновом режиме.")
@@ -520,51 +574,82 @@ async def _process_and_save_articles(articles_dict: List[Dict], eps: float, min_
         cluster_data_list.append(cluster_data)
         cluster_summaries_tasks.append(generate_cluster_summary(articles_summaries))
 
+    logger.info(f"Запуск генерации заголовков для {len(cluster_summaries_tasks)} кластеров...")
     cluster_summaries = await asyncio.gather(*cluster_summaries_tasks, return_exceptions=True)
+    logger.info(f"Генерация завершена. Результаты: {len(cluster_summaries)}")
 
     created_clusters = {}
     created_articles = {}
     
     for idx, cluster_data in enumerate(cluster_data_list):
-        llm_summary = cluster_summaries[idx]
+        llm_result = cluster_summaries[idx]
+        cluster_id = cluster_data['cluster_id']
         
-        if isinstance(llm_summary, Exception):
-            logger.error(f"Задача LLM для кластера {cluster_data['cluster_id']} провалилась: {llm_summary}")
-            cluster_name = cluster_data.get('cluster_name', f"Кластер #{cluster_data['cluster_id']}")
-            cluster_summary_text = cluster_data.get('cluster_summary', 'Автоматическое резюме недоступно.')
+        if isinstance(llm_result, Exception):
+            logger.error(f"❌ Кластер {cluster_id}: LLM задача провалилась - {type(llm_result).__name__}: {llm_result}")
+            cluster_name = f"Кластер #{cluster_id}"
+            cluster_summary_text = 'Автоматическое резюме недоступно из-за ошибки генерации.'
+        elif not isinstance(llm_result, dict):
+            logger.error(f"❌ Кластер {cluster_id}: Неожиданный тип результата - {type(llm_result)}, значение: {llm_result}")
+            cluster_name = f"Кластер #{cluster_id}"
+            cluster_summary_text = 'Автоматическое резюме недоступно.'
+        elif 'title' not in llm_result or 'summary' not in llm_result:
+            logger.error(f"❌ Кластер {cluster_id}: Отсутствуют ключи в результате. Ключи: {llm_result.keys()}")
+            cluster_name = f"Кластер #{cluster_id}"
+            cluster_summary_text = llm_result.get('summary', 'Автоматическое резюме недоступно.')
         else:
-            cluster_name = llm_summary['title']
-            cluster_summary_text = llm_summary['summary']
+            cluster_name = llm_result['title']
+            cluster_summary_text = llm_result['summary']
+            logger.info(f"✅ Кластер {cluster_id}: Заголовок установлен - '{cluster_name[:50]}...'")
         
         cluster = Cluster(
-            cluster_number=int(cluster_data['cluster_id']),
+            cluster_number=int(cluster_id),
             name=cluster_name,
             summary=cluster_summary_text
         )
         db.add(cluster)
         db.flush()
-        created_clusters[cluster_data['cluster_id']] = cluster
+        
+        logger.info(f"💾 Кластер {cluster_id} создан с ID={cluster.id}, name='{cluster.name[:50]}...'")
+        created_clusters[cluster_id] = cluster
 
+    logger.info(f"Начало обработки статей...")
     for cluster_data in result['clusters']:
         cluster = created_clusters[cluster_data['cluster_id']]
         for article_data in cluster_data['articles']:
             normalized_tags = normalize_hashtags(article_data.get('hashtags', []))
             existing_article = db.query(Article).filter(Article.link == article_data['link']).first()
+            
             if existing_article:
                 article = existing_article
-                article.title, article.summary, article.short_summary, article.hashtags, article.entities, article.author, article.cluster_id = \
-                    article_data['title'], article_data.get('summary'), article_data.get('short_summary'), normalized_tags, article_data.get('entities', {}), article_data.get('author'), cluster.id
+                article.title = article_data['title']
+                article.summary = article_data.get('summary')
+                article.short_summary = article_data.get('short_summary')
+                article.hashtags = normalized_tags
+                article.entities = article_data.get('entities', {})
+                article.author = article_data.get('author')
+                article.cluster_id = cluster.id
+                logger.debug(f"Обновлена статья: {article.title[:30]}...")
             else:
                 article = Article(
-                    link=article_data['link'], title=article_data['title'], summary=article_data.get('summary'),
-                    short_summary=article_data.get('short_summary'), source=article_data.get('source'),
-                    published=article_data.get('published'), author=article_data.get('author'),
-                    hashtags=normalized_tags, entities=article_data.get('entities', {}), cluster_id=cluster.id
+                    link=article_data['link'],
+                    title=article_data['title'],
+                    summary=article_data.get('summary'),
+                    short_summary=article_data.get('short_summary'),
+                    source=article_data.get('source'),
+                    published=article_data.get('published'),
+                    author=article_data.get('author'),
+                    hashtags=normalized_tags,
+                    entities=article_data.get('entities', {}),
+                    cluster_id=cluster.id
                 )
                 db.add(article)
+                logger.debug(f"Создана новая статья: {article.title[:30]}...")
+            
             db.flush()
             created_articles[article_data['link']] = article
 
+    logger.info(f"Связывание статей...")
     for cluster_data in result['clusters']:
         for article_data in cluster_data['articles']:
             article = created_articles[article_data['link']]
@@ -575,14 +660,23 @@ async def _process_and_save_articles(articles_dict: List[Dict], eps: float, min_
                     if related_article and related_article not in article.related_articles:
                         article.related_articles.append(related_article)
     
+    logger.info(f"Сохранение изменений в БД...")
     db.commit()
+    logger.info(f"✅ Все изменения успешно сохранены!")
+    
+    # Статистика
+    successful_summaries = sum(
+        1 for s in cluster_summaries 
+        if isinstance(s, dict) and 'title' in s and 'summary' in s
+    )
     
     return {
         "processed_articles": result['total_articles'],
         "total_clusters": result['total_clusters'],
         "clusters_created": len(created_clusters),
         "articles_created_or_updated": len(created_articles),
-        "llm_summaries_generated": sum(1 for s in cluster_summaries if not isinstance(s, Exception))
+        "llm_summaries_generated": successful_summaries,
+        "llm_summaries_failed": len(cluster_summaries) - successful_summaries
     }
 
 @app.post("/api/v1/articles/process-rss", tags=["Articles"])

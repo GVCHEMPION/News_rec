@@ -32,11 +32,11 @@ services:
       - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
     command: >
       python -m sglang.launch_server
-      --model-path Qwen/Qwen3-14B-AWQ
+      --model-path Qwen/Qwen3-4B-AWQ
       --host 0.0.0.0
       --port 30000
       --tp 1
-      --max-total-tokens 4096
+      --max-total-tokens 16384
       --mem-fraction-static 0.85
     volumes:
       - sglang_cache:/root/.cache/huggingface
@@ -60,20 +60,20 @@ services:
     networks:
       - news_network
 
-  rss_parser:
-    build:
-      context: ./rss_parser
-      dockerfile: Dockerfile
-    container_name: news_rss_parser
-    environment:
-      DATABASE_URL: postgresql://news_user:${DB_PASSWORD:-secure_password_123}@postgres:5432/news_db
-      SGLANG_URL: http://sglang:30000
-    volumes:
-      - ./rss_parser/input:/app/input:ro
-      - ./rss_parser/output:/app/output
-    restart: unless-stopped
-    networks:
-      - news_network
+  # rss_parser:
+  #   build:
+  #     context: ./rss_parser
+  #     dockerfile: Dockerfile
+  #   container_name: news_rss_parser
+  #   environment:
+  #     DATABASE_URL: postgresql://news_user:${DB_PASSWORD:-secure_password_123}@postgres:5432/news_db
+  #     SGLANG_URL: http://sglang:30000
+  #   volumes:
+  #     - ./rss_parser/input:/app/input:ro
+  #     - ./rss_parser/output:/app/output
+  #   restart: unless-stopped
+  #   networks:
+  #     - news_network
 
   api:
     build:
@@ -93,8 +93,8 @@ services:
         condition: service_healthy
       sglang:
         condition: service_healthy
-      rss_parser:
-        condition: service_started
+      # rss_parser:
+      #   condition: service_started
     restart: unless-stopped
     networks:
       - news_network

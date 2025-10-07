@@ -400,7 +400,7 @@ class UnifiedNewsService:
 
 
 def main():
-    with open('output/rss_feed_24h.json', "r", encoding="utf-8") as f:
+    with open('output/rss_feed_4h.json', "r", encoding="utf-8") as f:
         sample_data = json.loads(f.read())
     
     service = UnifiedNewsService()
