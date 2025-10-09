@@ -370,10 +370,10 @@ async def generate_cluster_summary(articles_summaries: List[str]) -> Dict[str, A
         }
 
 async def process_rss_on_startup():
+    return #Выключение загрузки
     logger.info("Запуск фоновой обработки RSS при старте...")
     db = SessionLocal()
     try:
-        # return #Выключение загрузки
         rss_data = load_rss_json()
         entries = rss_data.get("entries", [])
         if not entries:
@@ -398,24 +398,49 @@ async def process_rss_on_startup():
             cluster_data_list.append(cluster_data)
             cluster_summaries_tasks.append(generate_cluster_summary(articles_summaries))
         
-        cluster_summaries = await asyncio.gather(*cluster_summaries_tasks)
+        logger.info(f"🚀 Запуск генерации LLM-заголовков для {len(cluster_summaries_tasks)} кластеров...")
+        cluster_summaries = await asyncio.gather(*cluster_summaries_tasks, return_exceptions=True)
+        logger.info(f"✅ Генерация LLM-заголовков завершена. Результаты: {len(cluster_summaries)}")
 
         created_clusters = {}
         created_articles = {}
 
+        # ✅ ИСПРАВЛЕННАЯ ЛОГИКА ОБРАБОТКИ LLM РЕЗУЛЬТАТОВ
         for idx, cluster_data in enumerate(cluster_data_list):
-            llm_summary = cluster_summaries[idx]
+            llm_result = cluster_summaries[idx]
+            cluster_id = cluster_data['cluster_id']
+            
+            # Правильная обработка результатов LLM (как в _process_and_save_articles)
+            if isinstance(llm_result, Exception):
+                logger.error(f"❌ Кластер {cluster_id}: LLM задача провалилась - {type(llm_result).__name__}: {llm_result}")
+                cluster_name = f"Кластер #{cluster_id}"
+                cluster_summary_text = 'Автоматическое резюме недоступно из-за ошибки генерации.'
+            elif not isinstance(llm_result, dict):
+                logger.error(f"❌ Кластер {cluster_id}: Неожиданный тип результата - {type(llm_result)}, значение: {llm_result}")
+                cluster_name = f"Кластер #{cluster_id}"
+                cluster_summary_text = 'Автоматическое резюме недоступно.'
+            elif 'title' not in llm_result or 'summary' not in llm_result:
+                logger.error(f"❌ Кластер {cluster_id}: Отсутствуют ключи в результате. Ключи: {llm_result.keys()}")
+                cluster_name = f"Кластер #{cluster_id}"
+                cluster_summary_text = llm_result.get('summary', 'Автоматическое резюме недоступно.')
+            else:
+                cluster_name = llm_result['title']
+                cluster_summary_text = llm_result['summary']
+                logger.info(f"✅ Кластер {cluster_id}: Заголовок установлен - '{cluster_name[:50]}...'")
             
             cluster = Cluster(
-                cluster_number=int(cluster_data['cluster_id']),
-                name=llm_summary['title'],
-                summary=llm_summary['summary']
+                cluster_number=int(cluster_id),
+                name=cluster_name,
+                summary=cluster_summary_text
             )
             db.add(cluster)
             db.flush()
+            
+            logger.info(f"💾 Кластер {cluster_id} создан с ID={cluster.id}, name='{cluster.name[:50]}...'")
             created_clusters[cluster_data['cluster_id']] = cluster
 
         # Логика сохранения статей (остается прежней)
+        logger.info(f"Начало обработки статей...")
         for cluster_data in result['clusters']:
             cluster = created_clusters[cluster_data['cluster_id']]
             for article_data in cluster_data['articles']:
@@ -431,6 +456,7 @@ async def process_rss_on_startup():
                     article.entities = article_data.get('entities', {})
                     article.author = article_data.get('author')
                     article.cluster_id = cluster.id
+                    logger.debug(f"Обновлена статья: {article.title[:30]}...")
                 else:
                     article = Article(
                         link=article_data['link'],
@@ -445,10 +471,11 @@ async def process_rss_on_startup():
                         cluster_id=cluster.id
                     )
                     db.add(article)
+                    logger.debug(f"Создана новая статья: {article.title[:30]}...")
                 db.flush()
                 created_articles[article_data['link']] = article
         
-        # Логика связывания статей (остается прежней)
+        logger.info(f"Связывание статей...")
         for cluster_data in result['clusters']:
             for article_data in cluster_data['articles']:
                 article = created_articles[article_data['link']]
@@ -459,8 +486,20 @@ async def process_rss_on_startup():
                         if related_article and related_article not in article.related_articles:
                             article.related_articles.append(related_article)
         
+        logger.info(f"Сохранение изменений в БД...")
         db.commit()
-        logger.info(f"Обработка RSS на старте успешно завершена. Создано кластеров: {len(created_clusters)}, статей: {len(created_articles)}")
+        
+        successful_summaries = sum(
+            1 for s in cluster_summaries 
+            if isinstance(s, dict) and 'title' in s and 'summary' in s
+        )
+        
+        logger.info(f"✅ Обработка RSS на старте успешно завершена.")
+        logger.info(f"📊 Статистика:")
+        logger.info(f"   - Создано кластеров: {len(created_clusters)}")
+        logger.info(f"   - Создано/обновлено статей: {len(created_articles)}")
+        logger.info(f"   - LLM-заголовков сгенерировано: {successful_summaries}/{len(cluster_summaries)}")
+        logger.info(f"   - LLM-заголовков провалилось: {len(cluster_summaries) - successful_summaries}")
 
     except HTTPException as e:
         logger.warning(f"Ошибка при обработке RSS на старте: {e.detail}")

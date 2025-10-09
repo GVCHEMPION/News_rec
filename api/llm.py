@@ -1,5 +1,6 @@
 import os
 import asyncio
+import json
 from typing import List
 from pydantic import BaseModel, Field
 from openai import AsyncOpenAI
@@ -14,6 +15,7 @@ class ClusterAnalysis(BaseModel):
     )
     title: str = Field(
         ...,
+        max_lenght = 50,
         description="Красивый заголовок кластера, объединяющий все темы"
     )
     reasoning_about_summary: List[str] = Field(
@@ -24,6 +26,7 @@ class ClusterAnalysis(BaseModel):
     )
     summary: str = Field(
         ...,
+        max_lenght = 500,
         description="Краткое содержание кластера, которое показывает читателю, о чём класстер"
     )
 
@@ -67,14 +70,14 @@ class TextClusterAnalyzer:
     
         texts_formatted = "\n\n".join([f"Текст {i+1}:\n{text}" for i, text in enumerate(texts)])
         texts_formatted = self._truncate_to_sentence(texts_formatted, 4000)
-        
+        answer_schema = json.dumps(ClusterAnalysis.schema(), ensure_ascii=False, indent=2)
         prompt = f"""
 Проанализируй следующий кластер текстов и создай для него заголовок и краткое содержание.
 
 {texts_formatted}
 
-Анализируй темы, общие идеи и ключевые моменты всех текстов."""
-        
+Анализируй темы, общие идеи и ключевые моменты всех текстов. Строго следуй {answer_schema}. Не будь слишком многословным"""
+        print(f"prompt: {len(prompt)}")
         completion = await self.client.beta.chat.completions.parse(
             model=self.model,
             messages=[
@@ -84,7 +87,7 @@ class TextClusterAnalyzer:
                 }
             ],
             response_format=ClusterAnalysis,
-            temperature=0.7
+            temperature=0.7 
         )
         # print(type(completion.choices[0].message.parsed))
         return completion.choices[0].message.parsed
